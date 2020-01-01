@@ -17,7 +17,7 @@ library(formattable)
 library(DT)
 ```
 
-Say your company manufactures and sells electronic devices while offering a guarantee on each product. This project explores the idea of quantifying and forecasting the occurence of such defaults and therefore the future reparation/replacement needs using as input two datasets: one of that constains the history of reparations and another that documents the decices sold.
+Say your company manufactures and sells electronic devices while offering a guarantee on each product. This project explores the idea of quantifying and forecasting the occurence of such defaults and therefore the future reparation/replacement needs using as input historical data on reparation and sales.
 
 ## Dataset
 
@@ -116,9 +116,9 @@ failures_densities_df_nested <- failures_df_nested %>%
 failures_densities_df_nested
 ```
 
-On this generated data, the kernel density estimation seems does a pretty good job.
+On this generated data, the kernel density estimator seems to do a pretty good job. The method has two critical advantages over parametric density estimation methods for this use case: First its flexibility makes sure it can realistically fit the heterogeneous types of empirical distributions we could potentially encounter; Second, as new data comes in, updating the density function only requires to add up the new kernels to the existing density provided that we properly weight the exising and new infomation to their respective share of the total, which makes it economical in terms of computing needs.
 
-```{r, echo=FALSE, warning=FALSE}
+```{r, echo=FALSE, warning=FALSE, message = FALSE}
 failures_densities_df <- unnest(failures_densities_df_nested)
 
 p1 <- failures_densities_df %>%
@@ -168,15 +168,19 @@ Obtaining these device-specific lifetime densities are not an end in itself but 
 
 ## Failure forecasting
 
-In the previous section, we produced part-specific density functions in lifetime at failure $\hat f_j(\tau)$. We also have weighted them down so that if we denote by $\alpha_j$ the probability that a device containing the part $j$ fails due to part $j$, the lifetime at failure weighted density function of device $i$ containing the set of part $J_i$ is:
+Let's first illustrate the method for forecasting the failures of devices that are already sold and then discuss why the solution should be complemented with a sales planner to really provide worthwile results. 
+
+### Forecast failures for current fleat
+
+In the previous section, we produced part-specific density functions in lifetime at failure $\hat f_j(\tau)$. We also have weighted them down so that if we denote by $\alpha_j$ the probability that a device containing the part $j$ fails due to part $j$, the estimated lifetime at failure probability distribution of device $i$ containing the set of parts $J_i$ is:
 $$\hat g_i(\tau) = \sum_{j \in J} \alpha_j \hat f_j(\tau)$$
 
-where this weighting step ensures that $\int_{\tau=1}^{T} \hat g_i(\tau) = \sum_{j \in J} \alpha_j = \alpha_i$ i.e. the failure rate of the device $i$ is the sum of the failure rate of its parts.
+where the weighs ensure that $\int_{\tau=1}^{T} \hat g_i(\tau) = \sum_{j \in J} \alpha_j = \alpha_i$ i.e. that the failure rate of the device $i$ is the sum of the failure rate of its parts.
 
 Now we will use these device-specific densities in parallel with the sales data to compute the flow of failures by building on the following principle.
 
 $$ E \Big[ Nr(failure)_t \Big] = \sum_{i=1}^n \hat g_i(\tau_i, t)$$
-In other words, by adding up the device-specific weighted densities while appending them to the timeline so that $\tau = 1$ at the selling date, we'll obtain the expected number of failures at each point in time. Let's do try it out with a sample of 2 sold devices:
+In other words, by adding up the device-specific weighted densities while appending them to the timeline so that $\tau = 0$ at the selling date, we'll obtain the expected number of failures at each point in time. As a first step we join the sales data with the dataframe containing our estimations to obain a dataset where each row defines a part sold at a given date together with the related estimated life-at-failure probability distribution.
 
 ```{r, warning=FALSE}
 df <- data.frame(
@@ -192,7 +196,7 @@ forecast_nested <- sales_df %>%
 datatable(forecast_nested)
 ```
 
-Now we have to find a way to plug each of these probability vectors at the right place on the timeline i.e. so that $\tau_i=0$ at *date_sold* for all $i$, before adding them up to get the expected total number of failures throughtout time. The following function will do exactly that:
+Now we have to find a way to plug each of these probability vectors at the right place on the timeline i.e. make sure that $\tau_j=0$ where $t=date\_sold_j$** for all parts $j$, before adding them up to get the expected total number of failures throughtout time. The following function will do exactly that:
 
 ```{r}
 get_timelinedf = function(start_date, df){
@@ -210,6 +214,8 @@ get_timelinedf = function(start_date, df){
 }
 ```
 
+Now we can aggregate these results per day and get our part failure forecast.
+
 ```{r}
 (forecast_df <- forecast_nested %>%
   mutate(expected_failure = map2(date_sold, density_est, get_timelinedf)) %>%
@@ -219,18 +225,30 @@ get_timelinedf = function(start_date, df){
   summarise(values = sum(values)))
 ```
 
-Let's see what we got:
-
-```{r}
+```{r, echo = FALSE}
 forecast_df %>%
   ggplot(aes(timeline,values)) +
   geom_area(aes(fill = failure_description)) +
   labs(title = "Expected number of failures over time", y="# failures", x="") +
-  theme_bw()
+  theme_bw() +
+  geom_vline(xintercept=Sys.Date(), linetype="dashed", color = "red")
 # add vertical line at today's date
 ```
 
+### Forecast failures based on sales expectations
 
+It is clear from Figure x that we need an idea of how the device sales will evolve if we are to forecast failures in the medium run. This only requires a relatively small extention to what we already did where historical sales are complemented with a sales forecast. To a purely statistical (time series analysis) approach, I will prefer the more pragmatic way of requiring as input from business users the expected growth rate for each model's sales in the coming year(s). One could also want to combine this trend with some seasonal patterns that we can extract from historical sales data.
+
+Suppose the sales of device A are expected to decline by 10% a year for the two next years while the sales of device should grow by 15% per year during the same period. In a real life scenario, there might also be significant seasonality in the sales figures: in this case, it turns out that clients are more likely to buy devices at the end of the accounting period. Let's first build expectations about sales for the next two years based on these two elements.
+
+#### seasonality estimation
+
+
+#### sales forecast
+
+
+#### failures forecast
+All we have to do now is repeat our failures forecast based not only on the currently installed base but also on our expectations about these sales for the next two years.
 
 
 

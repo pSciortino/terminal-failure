@@ -58,3 +58,11 @@ sales_df<-tibble(
   device_model = c(rep("A", sales_A), rep("B", sales_B)),
   date_sold = sample(seq(from = startdate, to = enddate, by = "day"), sales_A + sales_B)
 )
+
+# add to sample(date) the prob argument a vector of probabilities that looks like
+c(rep(1,335),cumprod(c(1, rep(1.05, 30))))
+plot.ts(c(rep(1,335),cumprod(c(1, rep(1.05, 30)))))
+
+
+plot.ts(rsn(n = 30, omega = -20, alpha = 10, tau = 0) + 20)
+rsn(n = 30, omega = -5, alpha = 1, tau = 0)+20
