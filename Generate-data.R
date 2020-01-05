@@ -52,17 +52,28 @@ failures_df <- unnest(failures_df)
 #write.csv(failures_df, file = "failures_df.csv",row.names=FALSE)
 
 
+
 # Generate sales dataset  ----------------------------------------------
+
+library(lubridate)
+library(tidyverse)
+### Sales dataset generation ---------
+startdate <- as.Date("2017/1/1")
+enddate <- as.Date("2019/12/31")
+sales_A <- 2000
+sales_B <- 1000
+
+probability_vector<-rep(c(rep(1,304),cumprod(c(1, rep(1.08, 60)))),3)*seq(from = 1, to = 3, length.out = 1095)
+plot.ts(probability_vector)
 
 sales_df<-tibble(
   device_model = c(rep("A", sales_A), rep("B", sales_B)),
-  date_sold = sample(seq(from = startdate, to = enddate, by = "day"), sales_A + sales_B)
-)
-
-# add to sample(date) the prob argument a vector of probabilities that looks like
-c(rep(1,335),cumprod(c(1, rep(1.05, 30))))
-plot.ts(c(rep(1,335),cumprod(c(1, rep(1.05, 30)))))
+  date_sold = sample(seq(from = startdate, to = enddate, by = "day"), sales_A + sales_B, prob = probability_vector, replace = TRUE)
+) %>%
+  group_by(device_model, date_sold) %>%
+  summarize(sales = n()) 
 
 
-plot.ts(rsn(n = 30, omega = -20, alpha = 10, tau = 0) + 20)
-rsn(n = 30, omega = -5, alpha = 1, tau = 0)+20
+
+#ts_A %>% decompose() %>% autoplot
+#autoplot(decompose(ts_A, "multiplicative")$seasonal)

@@ -5,21 +5,29 @@ output:
     collapse: no
     df_print: paged
     toc: yes
-    toc_depth: 4
+    toc_depth: 3
     toc_float: yes
   pdf_document:
     toc: yes
-    toc_depth: '4'
+    toc_depth: '2'
+bibliography: bibliography.bibtex
 ---
 ```{r setup, include=FALSE}
 library(tidyverse)
 library(formattable)
 library(DT)
 ```
+## Introduction
 
-Say your company manufactures and sells electronic devices while offering a guarantee on each product. This project explores the idea of quantifying and forecasting the occurence of such defaults and therefore the future reparation/replacement needs using as input historical data on reparation and sales.
+Say the company we work for manufactures and sells electronic devices in a B2B context while offering after sales services. Shutdown time might be extremely costly for clients and handling devices replacement or reparation requires maintening a sufficient stock. Yet, producing and storing spare parts and devices comes with a cost which is why inventory levels should be just enough to cover the demand. This project explores the idea of quantifying and forecasting the occurence of device failures and therefore the future reparation/replacement needs using as input historical data on reparations (as a proxy for failure occurences) and product sales.
 
-## Dataset
+Literature reviews on the topic [@van2019forecasting; @dekker2013use] stress the poor suitability of traditional time series forecasting for the task of predicting spare part demand. A first challenge is that the occurence of failures is erratic and intermitent. Another is that our expectations on the number of failures should obviously take into account the number of devices currently on the market, which we will refer to as the *installed base*, rather than naïvely extrapolating patterns observed in historical failure data. 
+
+The method explored here will consist in three steps: First, a time-to-failure probability distribution will be estimated for each device part based on historical failure data. Then, under the assumption that a device's maintenance depend exclusively and additively on the occasional failure of a part it contains, a time-to-failure probability distribution for each model of device is inferred. In a second phase, a forecast of future failures is performed based on the current state of the installed base by exploiting the fact that the expected number of device failures in time t is the sum of the individual probabilities to fail in time t for all devices in service. Finally, the exercise will be repeated in a setting where the future size and composition of the installed base can be estimated. 
+
+The proposed method follows the literature's recommendations to think of the installed base as the driving factor for failures and therefore to exploit its current but also future state for the purpose of building expectations on future failures. Besides, it follows the subset of this literature that estimates time-to-failure probability distributions for each particular product instead of single-point estimates. What distinguishes the present attempt is the use of a non-parametric density estimation technique to build these probability distributions. I also explore how statistical information can be combined with business knowledge to build pragmatic expectations on the future evolution of the installed base.
+
+## Data generation
 
 ```{r, include = FALSE}
 # Parameters ------------------------------------------------------------
@@ -40,8 +48,8 @@ parts_b <- c("K02", "S01")
 ### Sales dataset generation ---------
 startdate <- as.Date("2015/1/1")
 enddate <- as.Date("2019/12/1")
-sales_A <- 100
-sales_B <- 200
+sales_A <- 2000/4
+sales_B <- 1000/4
 ```
 
 
@@ -52,25 +60,31 @@ source("Generate-data.R")
 The two datasets used as source for the analysis are generated for the purpose of this project.
 
 ### Reparation data
-In total, `r nr_a` terminals of model A have been sold and `r formattable::percent(failure_rate_a,0)` were returned due to failure. More specifically, x were returned because of a screen failure and y because of a keyboard failure. (to be continued)
+In total, `r nr_a` terminals of model A have been sold and `r formattable::percent(failure_rate_a,0)` were returned due to failure. More specifically, x were returned because of a screen failure and y because of a keyboard failure. 
+
+Part-specific life-at-failure probability distributons were used to generate failures. These distributions were obtained by combining together skewed normal, truncated normal and uniform distributions so that methods based on the normality assumption or other simplifying assumptions should not be misleadingly validated.
 
 We get:
 ```{r, echo=FALSE, warning =FALSE}
 failures_df %>%
-  datatable()
+  head(100) #%>%
+  #datatable()
 ```
 
 ### Sales data
 
-Say `r sales_A` devices of model A and `r sales_B` devices of model B were sold between `r format(startdate, "%B %d %Y")` and `r format(enddate, "%B %d %Y")`,  where the date at which an individual device has been sold is randomly drawn from this time range. We get:
+Say `r sales_A` devices of model A and `r sales_B` devices of model B were sold between `r format(startdate, "%B %d %Y")` and `r format(enddate, "%B %d %Y")`.
+
+The dataset is generated as follows: First, a sequence of consecutive dates from `r format(startdate, "%B %d %Y")` and `r format(enddate, "%B %d %Y")` is generated. Then a sample of size `r sales_A` + `r sales_B` is drawn with replacement from this sequence. Some seasonality is deliberately created by the fact that at each stochastic iteration, the relative probability for a given date in the sequence to be picked depends on its position in the calendar year.
 ```{r}
-sales_df
+sales_df %>%
+  head(100)
 ```
 
 
 ## Exploration and density estimation
 
-Now let's start exploring the reparation dataset as if we didn't know the generation process. First we're interested in understanding the lifetime at which failures generally occur. Here we visualize the frequency of the devices lifetime at failure for 3 failures type and 3 different device parts.
+Now let's start exploring the reparation dataset as if we didn't know its generating process. First we're interested in understanding the lifetime at which failures generally occur. Here we visualize the frequency of the devices lifetime at failure for 3 failures type and 3 different device parts.
 ```{r, echo=FALSE, warning=FALSE}
 (p0 <- failures_df %>%
   ggplot(aes(lifetime_at_failure)) + geom_histogram(aes(fill=failure_description), binwidth = 1) +
@@ -79,12 +93,12 @@ Now let's start exploring the reparation dataset as if we didn't know the genera
   ylim(0,15))
 ```
 
-We already see some interesting patterns here, for example a lot of failures are recorded in the first 60 days of life for the part *K01*, followed by a second wave centered around 300 days of life. On the other hand, the "screen shutdown" seems to occur at any time of the device's life. A way to make more sense of these spiky frequencies will be to estimate failure-specific density distributions based on this information. The obtained density distributions will have two advantages:
+We already see some interesting patterns here, for example a lot of failures are recorded in the first 60 days of life for the part *K01*, followed by a second wave centered around 300 days of life. On the other hand, the "screen shutdown" seems to occur at any time of the device's life. A way to make more sense of these spiky frequencies is to estimate failure-specific density distributions based on this information. The obtained density distributions will have two advantages:
 
-* get a smooth distribution of when failures are likely to occur by getting rid of the uninformative spikes;
+* get a smooth distribution of when failures are likely to occur by getting rid of uninformative spikes;
 * get a vector of (relative) failure probabilities instead of frequencies. This is what we'll need for the forecasting part.
 
-By estimating those densities at the part - failure type level, we also keep the lowest level of granularity while leveraging the whole pool of observations when an identical part is shared by multiple devices. 
+By estimating those densities at the part - failure type level, we also keep the lowest level of granularity while leveraging the whole pool of training observations when an identical part is shared by multiple devices. 
 
 We'll use a (Gaussian) Kernel density estimator to get the density functions we need. Let's first nest our dataset as follows:
 ```{r, echo=TRUE, warning =FALSE}
@@ -93,9 +107,9 @@ We'll use a (Gaussian) Kernel density estimator to get the density functions we 
   group_by(part, part_code, failure_description) %>%
   nest())
 ```
-where each value in the column "data" is actually a 2-columns dataframe that records for each failure the lifetime at which it occured and the total number of devices from this model that constitute the installed base. 
+where each value in the column "data" is actually a 2-columns dataframe that records for each failure the lifetime at which it occured and the total number of devices from the corresponding model in the installed base. 
 
-The following function will be applied to the nested dataset to return for each row a dataframe that contains the density estimation for the device part at hand. While the lifetime at failure will be used to estimate the density of the survival time, the install base will be usefull to weigh down these densities so that they integrate to their respective likelihood instead of one.
+The following function will be applied to the nested dataset to return for each row a dataframe that contains the density estimation for the device part at hand. While the lifetime at failure will be used to estimate the density of the survival time, the installed base information will be usefull to weigh down these densities so that they integrate to their respective likelihood instead of one.
 ```{r, echo=TRUE, warning =FALSE}
 get_weighted_density_df <- function(df) {
   shareofpopulation = length(df[["lifetime_at_failure"]])/max(df[["nr_terminals"]])
@@ -116,7 +130,7 @@ failures_densities_df_nested <- failures_df_nested %>%
 failures_densities_df_nested
 ```
 
-On this generated data, the kernel density estimator seems to do a pretty good job. The method has two critical advantages over parametric density estimation methods for this use case: First its flexibility makes sure it can realistically fit the heterogeneous types of empirical distributions we could potentially encounter; Second, as new data comes in, updating the density function only requires to add up the new kernels to the existing density provided that we properly weight the exising and new infomation to their respective share of the total, which makes it economical in terms of computing needs.
+On this generated data, the kernel density estimator seems to do a pretty good job. Unlike a parametric density estimation method, the kernel density estimator is highly flexible which makes it able to fit the heterogeneous types of empirical distributions we could potentially encounter. That said, it has two potential drawbacks relative to an approach that assumes ex-ante a distribution for the density that is to be estimated: First, it risks *overfitting* when the number of training observations is low relative to the variance in the time-to-failure variable. This should not be a concern here given the amount of observations we have. A second possible drawback is that it is a slightly more *computation intensive* method. In a real-life scenario however, this can be mitigated by the fact that new data can be processed incrementally. Indeed, updating the density function only requires to add up the new kernels to the existing density provided that we properly weight the exising and new infomation to their respective share of total.
 
 ```{r, echo=FALSE, warning=FALSE, message = FALSE}
 failures_densities_df <- unnest(failures_densities_df_nested)
@@ -131,7 +145,7 @@ p1 <- failures_densities_df %>%
 gridExtra::grid.arrange(p0 + guides(fill = FALSE), p1, ncol = 2, nrow = 1)
 ```
 
-Now that we have estimated lifetime densities for each part, we can add them up to get the lifetime densities for device A and device B.
+Now that we have estimated a time-to-failure probability distribution for each part, we can add them up to get that of device A and B.
 
 ```{r, echo=FALSE, warning =FALSE}
 
@@ -164,23 +178,23 @@ p3 <- failure_densities_bydevice %>%
 gridExtra::grid.arrange(p2, p3, ncol = 2, nrow = 1)
 ```
 
-Obtaining these device-specific lifetime densities are not an end in itself but a necessary step to reach our final objective: forecasting the reparation flow of our electronic devices.
+Obtaining these device-specific lifetime probability distributions is the first step towards forecasting the reparation flow of our electronic devices. In what follows we'll see how these vectors of probabilities can be used for this purpose.
 
 ## Failure forecasting
 
-Let's first illustrate the method for forecasting the failures of devices that are already sold and then discuss why the solution should be complemented with a sales planner to really provide worthwile results. 
+Let's first illustrate the method for forecasting the failures of the current installed base – i.e. the pool of devices that have already been sold at the time the forecast is performed – and then discuss why the solution should be complemented with sales forecasts to really provide worthwile results. 
 
-### Forecast failures for current fleat
+### Static installed base setting
 
-In the previous section, we produced part-specific density functions in lifetime at failure $\hat f_j(\tau)$. We also have weighted them down so that if we denote by $\alpha_j$ the probability that a device containing the part $j$ fails due to part $j$, the estimated lifetime at failure probability distribution of device $i$ containing the set of parts $J_i$ is:
-$$\hat g_i(\tau) = \sum_{j \in J} \alpha_j \hat f_j(\tau)$$
+In the previous section, we estimate part-specific density functions, $\hat f_j(\tau)$ in their time-to-failure $\tau$. We then weight them down before showing how we can use them to infer a failure probability function for each device model. If we denote by $\alpha_j$ the probability that a device containing the part $j$ fails due to part $j$, the estimated time-to-failure probability distribution of device $i$ containing the set of parts $J_i$ is:
+$$\hat g_i(\tau) = \sum_{j \in J_i} \alpha_j \hat f_j(\tau)$$
 
-where the weighs ensure that $\int_{\tau=1}^{T} \hat g_i(\tau) = \sum_{j \in J} \alpha_j = \alpha_i$ i.e. that the failure rate of the device $i$ is the sum of the failure rate of its parts.
+where the weights ensure that $\int_{\tau=1}^{T} \hat g_i(\tau) = \sum_{j \in J} \alpha_j = \alpha_i$ i.e. that the failure rate of the device $i$ is the sum of the failure rate of its parts.
 
 Now we will use these device-specific densities in parallel with the sales data to compute the flow of failures by building on the following principle.
 
-$$ E \Big[ Nr(failure)_t \Big] = \sum_{i=1}^n \hat g_i(\tau_i, t)$$
-In other words, by adding up the device-specific weighted densities while appending them to the timeline so that $\tau = 0$ at the selling date, we'll obtain the expected number of failures at each point in time. As a first step we join the sales data with the dataframe containing our estimations to obain a dataset where each row defines a part sold at a given date together with the related estimated life-at-failure probability distribution.
+$$ E \Big[ Nr(failure)_t \Big] = \sum_{i=1}^n \hat g_i(\tau_i, t) = \sum_{i=1}^n \sum_{j \in J_i} \alpha_j \hat f_j(\tau)$$
+In other words, by adding up the part-specific weighted densities while appending them to the timeline so that $\tau = 0$ at the corresponding device's selling date, we'll obtain the expected number of failures at each point in time. As a first step we join the sales data with the dataframe containing our estimations to obain a dataset where each row defines a part sold at a given date together with the related estimated life-at-failure probability distribution.
 
 ```{r, warning=FALSE}
 df <- data.frame(
@@ -193,7 +207,8 @@ forecast_nested <- sales_df %>%
   left_join(failure_densities_bydevice_nested, by = "part_code") %>%
   select(-c(nr_terminals,terminal_model))
 
-datatable(forecast_nested)
+forecast_nested %>%
+  head(100) 
 ```
 
 Now we have to find a way to plug each of these probability vectors at the right place on the timeline i.e. make sure that $\tau_j=0$ where $t=date\_sold_j$** for all parts $j$, before adding them up to get the expected total number of failures throughtout time. The following function will do exactly that:
@@ -214,17 +229,18 @@ get_timelinedf = function(start_date, df){
 }
 ```
 
-Now we can aggregate these results per day and get our part failure forecast.
+Now we can aggregate these results per date and get our part failure forecast.
 
 ```{r}
-(forecast_df <- forecast_nested %>%
+forecast_df <- forecast_nested %>%
   mutate(expected_failure = map2(date_sold, density_est, get_timelinedf)) %>%
   select(-density_est) %>%
   unnest() %>%
   group_by(timeline, failure_description) %>%
-  summarise(values = sum(values)))
+  summarise(values = sum(values))
 ```
 
+Note that the fact that we have kept the granularity at the failure description level enables the prediction not only of the number of failures but also of the reason for those failures. This might be important if the goal is to manage spare parts inventories or to disinguish between demand for reparation and demand for replacement.
 ```{r, echo = FALSE}
 forecast_df %>%
   ggplot(aes(timeline,values)) +
@@ -235,21 +251,52 @@ forecast_df %>%
 # add vertical line at today's date
 ```
 
-### Forecast failures based on sales expectations
+### Evolving installed base setting
 
-It is clear from Figure x that we need an idea of how the device sales will evolve if we are to forecast failures in the medium run. This only requires a relatively small extention to what we already did where historical sales are complemented with a sales forecast. To a purely statistical (time series analysis) approach, I will prefer the more pragmatic way of requiring as input from business users the expected growth rate for each model's sales in the coming year(s). One could also want to combine this trend with some seasonal patterns that we can extract from historical sales data.
+While forecasting the failures for the current install base might be a realistic objective in the context of an end-of-life product, it is clear that the sales of recent products might continue, or even grow, in the future. In that case, it is not robust anymore to base our forecast on the current installed base only.
 
-Suppose the sales of device A are expected to decline by 10% a year for the two next years while the sales of device should grow by 15% per year during the same period. In a real life scenario, there might also be significant seasonality in the sales figures: in this case, it turns out that clients are more likely to buy devices at the end of the accounting period. Let's first build expectations about sales for the next two years based on these two elements.
+To integrate the notion of an evolving installed base, all we need is to enrich the historical sales data with a product-specific sales forecast. To a purely statistical (time series forecasting) approach, I will opt for requiring as input from business users the expected growth rate for each model’s sales in the coming year(s). One might also want to combine this user-defined trend with some seasonal patterns that we can extract from historical sales data. Hence, I will explore the idea of combining the two in a hybrid approach.
 
 #### seasonality estimation
+Let's first aggregate historical sales data by month and look for visible patterns:
+```{r}
+sales_df_monthly <- sales_df %>%
+  group_by(device_model, yearmonth = strftime(date_sold, "%Y%m"), year = strftime(date_sold, "%Y"), month = strftime(date_sold, "%m")) %>%
+  summarize(monthly_sales = n()) %>%
+  arrange(year, month) 
+```
+
+```{r, echo = F}
+sales_df_monthly %>%
+  ggplot(aes(yearmonth, monthly_sales)) +
+  geom_bar(stat="identity") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Monthly sales - historical", x = "", y = "Number of devices sold")
+```
+
+There is obviously some seasonality in the sales: client orders tend to be higher in the two last months of the year. It also seems that sales tend to increase over time. In what follows we use an SARIMA multiplicative model to extract the cylical component out of this series. Our goal will be to exploit it in the forecasting of future sales while letting business figure out a plosible trend for the comming years.
+
+```{r}
+# focus on device A and transform the dataset in a time series object
+failures_A_series <- sales_df_monthly %>%
+  filter(device_model == "A") 
+
+ts_A<-ts(failures_A_series$monthly_sales, frequency =12, start= c(year(startdate), day(startdate) - 1))
+
+# decompose time series
+ts_A_model<- decompose(ts_A, "multiplicative")
+plot(ts_A_model)
+```
 
 
 #### sales forecast
+Now assume the production experts inform us that although both will remain on the market for a while, the sales teams have been given the objective to focus their effort in selling *device B* over *device A* in the future. Therefore, they expect the sales to increase by 15% per year for the latter and to decrease by 30% a year for the former. This might be justified by financial or strategic reasons which is why I believe that in some cases, no statistical technique could outperform the business input for the purpose of estimating the trend component of the product's sales.
+
 
 
 #### failures forecast
 All we have to do now is repeat our failures forecast based not only on the currently installed base but also on our expectations about these sales for the next two years.
 
 
-
+## References
 
