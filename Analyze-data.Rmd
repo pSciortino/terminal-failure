@@ -7,15 +7,21 @@ output:
     toc: yes
     toc_depth: 3
     toc_float: yes
+    code_folding: hide
   pdf_document:
     toc: yes
     toc_depth: '2'
 bibliography: bibliography.bibtex
 ---
-```{r setup, include=FALSE}
+```{r setup, include=FALSE, message = FALSE}
 library(tidyverse)
 library(formattable)
 library(DT)
+library(kernhaz)
+library(survPresmooth)
+library(lubridate)
+library(ggpubr)
+library(tsbox)
 ```
 ## Introduction
 
@@ -46,14 +52,14 @@ parts_b <- c("K02", "S01")
 
 
 ### Sales dataset generation ---------
-startdate <- as.Date("2015/1/1")
-enddate <- as.Date("2019/12/1")
-sales_A <- 2000/4
-sales_B <- 1000/4
+startdate <- as.Date("2017/1/1")
+enddate <- as.Date("2019/12/31")
+sales_A <- 2000
+sales_B <- 1000
 ```
 
 
-```{r, include = FALSE}
+```{r, include = FALSE, message = FALSE, warning= FALSE}
 source("Generate-data.R")
 ```
 
@@ -65,7 +71,7 @@ In total, `r nr_a` terminals of model A have been sold and `r formattable::perce
 Part-specific life-at-failure probability distributons were used to generate failures. These distributions were obtained by combining together skewed normal, truncated normal and uniform distributions so that methods based on the normality assumption or other simplifying assumptions should not be misleadingly validated.
 
 We get:
-```{r, echo=FALSE, warning =FALSE}
+```{r, warning =FALSE}
 failures_df %>%
   head(100) #%>%
   #datatable()
@@ -85,7 +91,7 @@ sales_df %>%
 ## Exploration and density estimation
 
 Now let's start exploring the reparation dataset as if we didn't know its generating process. First we're interested in understanding the lifetime at which failures generally occur. Here we visualize the frequency of the devices lifetime at failure for 3 failures type and 3 different device parts.
-```{r, echo=FALSE, warning=FALSE}
+```{r, warning=FALSE}
 (p0 <- failures_df %>%
   ggplot(aes(lifetime_at_failure)) + geom_histogram(aes(fill=failure_description), binwidth = 1) +
   facet_wrap(~part_code, ncol = 1) +
@@ -111,6 +117,7 @@ where each value in the column "data" is actually a 2-columns dataframe that rec
 
 The following function will be applied to the nested dataset to return for each row a dataframe that contains the density estimation for the device part at hand. While the lifetime at failure will be used to estimate the density of the survival time, the installed base information will be usefull to weigh down these densities so that they integrate to their respective likelihood instead of one.
 ```{r, echo=TRUE, warning =FALSE}
+# Non-censored case
 get_weighted_density_df <- function(df) {
   shareofpopulation = length(df[["lifetime_at_failure"]])/max(df[["nr_terminals"]])
   kdensity <- density(df[["lifetime_at_failure"]], bw = "nrd0", kernel = "gaussian", from=0, to=3000, n =3001) 
@@ -119,20 +126,25 @@ get_weighted_density_df <- function(df) {
     weighted_density = kdensity$y * shareofpopulation
   )
 }
-```
 
-And here we go
-```{r}
+# Censored durations case
+get_weighted_presmooth_density_df  <- function(df) {
+  shareofpopulation = length(df[["lifetime_at_failure"]])/max(df[["nr_terminals"]])
+  kdensity <- presmooth(times = df[["lifetime_at_failure"]], status = rep(1,length(df[["lifetime_at_failure"]])), estimand = "f", x.est = seq(0,3000, by=1), bw.selec = "plug-in") 
+  data.frame(
+    life_length = kdensity$x.est,
+    weighted_density = kdensity$estimate * shareofpopulation
+  )
+}
+
 failures_densities_df_nested <- failures_df_nested %>%
-  mutate(density_est = map(data, get_weighted_density_df)) %>%
+  mutate(density_est = map(data, get_weighted_presmooth_density_df)) %>%
   select(-data) 
-
-failures_densities_df_nested
 ```
 
 On this generated data, the kernel density estimator seems to do a pretty good job. Unlike a parametric density estimation method, the kernel density estimator is highly flexible which makes it able to fit the heterogeneous types of empirical distributions we could potentially encounter. That said, it has two potential drawbacks relative to an approach that assumes ex-ante a distribution for the density that is to be estimated: First, it risks *overfitting* when the number of training observations is low relative to the variance in the time-to-failure variable. This should not be a concern here given the amount of observations we have. A second possible drawback is that it is a slightly more *computation intensive* method. In a real-life scenario however, this can be mitigated by the fact that new data can be processed incrementally. Indeed, updating the density function only requires to add up the new kernels to the existing density provided that we properly weight the exising and new infomation to their respective share of total.
 
-```{r, echo=FALSE, warning=FALSE, message = FALSE}
+```{r, warning=FALSE, message = FALSE}
 failures_densities_df <- unnest(failures_densities_df_nested)
 
 p1 <- failures_densities_df %>%
@@ -142,12 +154,12 @@ p1 <- failures_densities_df %>%
   ylab("weighted density") + xlab("survival length (days)") +
   theme_light()
 
-gridExtra::grid.arrange(p0 + guides(fill = FALSE), p1, ncol = 2, nrow = 1)
+ggpubr::ggarrange(p0, p1, common.legend = TRUE, ncol = 2, legend = "bottom")
 ```
 
 Now that we have estimated a time-to-failure probability distribution for each part, we can add them up to get that of device A and B.
 
-```{r, echo=FALSE, warning =FALSE}
+```{r, warning =FALSE, message = FALSE}
 
 failure_densities_bydevice_nested <- terminals_df %>%
   left_join(failures_densities_df_nested)
@@ -241,7 +253,7 @@ forecast_df <- forecast_nested %>%
 ```
 
 Note that the fact that we have kept the granularity at the failure description level enables the prediction not only of the number of failures but also of the reason for those failures. This might be important if the goal is to manage spare parts inventories or to disinguish between demand for reparation and demand for replacement.
-```{r, echo = FALSE}
+```{r}
 forecast_df %>%
   ggplot(aes(timeline,values)) +
   geom_area(aes(fill = failure_description)) +
@@ -266,11 +278,20 @@ sales_df_monthly <- sales_df %>%
   arrange(year, month) 
 ```
 
-```{r, echo = F}
+```{r}
+peaks <- data.frame(
+  start = paste(seq(min(sales_df_monthly$year), max(sales_df_monthly$year),1),"11", sep=""),
+  end = as.character(as.numeric(paste(seq(min(sales_df_monthly$year), max(sales_df_monthly$year) ,1),"01", sep="")) + 100)
+)
+
 sales_df_monthly %>%
+  filter(device_model == "A") %>%
   ggplot(aes(yearmonth, monthly_sales)) +
-  geom_bar(stat="identity") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_line(aes(group=1)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  geom_rect(data = peaks, aes(xmin = start , xmax = end, ymin = -Inf, ymax = Inf),
+            inherit.aes=FALSE, alpha = 0.4, fill = c("lightblue")) +
   labs(title = "Monthly sales - historical", x = "", y = "Number of devices sold")
 ```
 
@@ -285,7 +306,11 @@ ts_A<-ts(failures_A_series$monthly_sales, frequency =12, start= c(year(startdate
 
 # decompose time series
 ts_A_model<- decompose(ts_A, "multiplicative")
-plot(ts_A_model)
+#plot(ts_A_model, xlab= "")
+
+installbase_decomposed_df <- ts_df(ts_A_model$trend) %>%
+  left_join(ts_df(ts_A_model$seasonal), by = "time") %>%
+  rename(trend = value.x, seasonality = value.y)
 ```
 
 
