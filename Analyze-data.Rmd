@@ -22,16 +22,19 @@ library(survPresmooth)
 library(lubridate)
 library(ggpubr)
 library(tsbox)
+library(modelr)
 ```
-## Introduction
+## Project summary
 
-Say the company we work for manufactures and sells electronic devices in a B2B context while offering after sales services. Shutdown time might be extremely costly for clients and handling devices replacement or reparation requires maintening a sufficient stock. Yet, producing and storing spare parts and devices comes with a cost which is why inventory levels should be just enough to cover the demand. This project explores the idea of quantifying and forecasting the occurence of device failures and therefore the future reparation/replacement needs using as input historical data on reparations (as a proxy for failure occurences) and product sales.
+Say the company we work for manufactures and sells electronic devices in a B2B context while offering after sales services. In some sectors, shutdown time might be extremely costly for clients and handling devices reparation requires maintening a sufficient stock at hand. Yet, producing and storing spare parts comes with a cost which is why inventory levels should be about just high enough to cover the demand. This project explores the idea of quantifying and forecasting the occurence of device failures and therefore the future reparation needs using as input historical data on reparations (as a proxy for failure occurences) and product sales.
 
-Literature reviews on the topic [@van2019forecasting; @dekker2013use] stress the poor suitability of traditional time series forecasting for the task of predicting spare part demand. A first challenge is that the occurence of failures is erratic and intermitent. Another is that our expectations on the number of failures should obviously take into account the number of devices currently on the market, which we will refer to as the *installed base*, rather than naïvely extrapolating patterns observed in historical failure data. 
+Literature reviews on the topic [@van2019forecasting; @dekker2013use] stress the poor suitability of traditional time series forecasting for the task of predicting spare parts demand. A first challenge is that the occurence of failures is erratic and intermitent. Another is that our expectations on the number of failures should obviously take into account the number of devices currently on the market, which we will refer to as the *installed base*, but also the expected evolution of this installed base, rather than naïvely extrapolating patterns observed in historical failure data. 
 
-The method explored here will consist in three steps: First, a time-to-failure probability distribution will be estimated for each device part based on historical failure data. Then, under the assumption that a device's maintenance depend exclusively and additively on the occasional failure of a part it contains, a time-to-failure probability distribution for each model of device is inferred. In a second phase, a forecast of future failures is performed based on the current state of the installed base by exploiting the fact that the expected number of device failures in time t is the sum of the individual probabilities to fail in time t for all devices in service. Finally, the exercise will be repeated in a setting where the future size and composition of the installed base can be estimated. 
+The method explored here will consist in three steps: First, a time-to-failure probability distribution will be estimated for each device part based on historical failure data. In a second phase, a forecast of future failures is performed based on the current state of the installed base by exploiting the fact that the expected number of part failures in time t is the sum of the individual probabilities to fail in time t for all parts in service. Finally, the exercise will be repeated in a setting where the future size and composition of the installed base can be estimated.
 
-The proposed method follows the literature's recommendations to think of the installed base as the driving factor for failures and therefore to exploit its current but also future state for the purpose of building expectations on future failures. Besides, it follows the subset of this literature that estimates time-to-failure probability distributions for each particular product instead of single-point estimates. What distinguishes the present attempt is the use of a non-parametric density estimation technique to build these probability distributions. I also explore how statistical information can be combined with business knowledge to build pragmatic expectations on the future evolution of the installed base.
+### Literature takeaways
+
+The proposed method follows the literature's recommendations to think of the installed base as the driving factor for failures and therefore to exploit its current but also future state for the purpose of building expectations on future failures. Besides, it follows the subset of this literature that estimates time-to-failure probability distributions for each particular product instead of single-point estimates. What distinguishes the present attempt is the use of a non-parametric density estimation technique to build these probability distributions while generally a Weibull distribution is fitted. I also explore how statistical information can be combined with business knowledge to build pragmatic expectations on the future evolution of the installed base.
 
 ## Data generation
 
@@ -265,20 +268,19 @@ forecast_df %>%
 
 ### Evolving installed base setting
 
-While forecasting the failures for the current install base might be a realistic objective in the context of an end-of-life product, it is clear that the sales of recent products might continue, or even grow, in the future. In that case, it is not robust anymore to base our forecast on the current installed base only.
-
-To integrate the notion of an evolving installed base, all we need is to enrich the historical sales data with a product-specific sales forecast. To a purely statistical (time series forecasting) approach, I will opt for requiring as input from business users the expected growth rate for each model’s sales in the coming year(s). One might also want to combine this user-defined trend with some seasonal patterns that we can extract from historical sales data. Hence, I will explore the idea of combining the two in a hybrid approach.
+While forecasting the failures for the current installed base might be a realistic objective in the context of an end-of-life product, it is clear that the sales might continue, or even grow in the future. In this context, our model should be extended to take into account the fact that the installed base will keep evolving in terms of size and composition in the future.
 
 #### seasonality estimation
-Let's first aggregate historical sales data by month and look for visible patterns:
+
+To integrate the notion of an evolving installed base, all we need is to enrich the historical sales data with  product-specific sales forecasts. My opinion is that the main part of this forecast must come from business experts, which is why I would exclude any purely statistical (time series forecasting) approach. However, I will explore how the business knowledge of future trends might be combined with seasonal patterns that we can extract from historical sales data in a hybrid approach.
+
+Say our sales data look like this:
 ```{r}
 sales_df_monthly <- sales_df %>%
   group_by(device_model, yearmonth = strftime(date_sold, "%Y%m"), year = strftime(date_sold, "%Y"), month = strftime(date_sold, "%m")) %>%
   summarize(monthly_sales = n()) %>%
   arrange(year, month) 
-```
 
-```{r}
 peaks <- data.frame(
   start = paste(seq(min(sales_df_monthly$year), max(sales_df_monthly$year),1),"11", sep=""),
   end = as.character(as.numeric(paste(seq(min(sales_df_monthly$year), max(sales_df_monthly$year) ,1),"01", sep="")) + 100)
@@ -295,12 +297,12 @@ sales_df_monthly %>%
   labs(title = "Monthly sales - historical", x = "", y = "Number of devices sold")
 ```
 
-There is obviously some seasonality in the sales: client orders tend to be higher in the two last months of the year. It also seems that sales tend to increase over time. In what follows we use an SARIMA multiplicative model to extract the cylical component out of this series. Our goal will be to exploit it in the forecasting of future sales while letting business figure out a plosible trend for the comming years.
+There is obviously some seasonality in the sales: client orders tend to be higher in the last two months of the year. It also seems that sales tend to increase over time. In what follows we use a multiplicative model to extract the cylical component from this series. Our goal will be to exploit it in the forecasting of future sales while letting the business figure out a plausible trend for each product's sales in the comming years.
 
 ```{r}
 # focus on device A and transform the dataset in a time series object
 failures_A_series <- sales_df_monthly %>%
-  filter(device_model == "A") 
+  filter(device_model == "A")
 
 ts_A<-ts(failures_A_series$monthly_sales, frequency =12, start= c(year(startdate), day(startdate) - 1))
 
@@ -308,14 +310,64 @@ ts_A<-ts(failures_A_series$monthly_sales, frequency =12, start= c(year(startdate
 ts_A_model<- decompose(ts_A, "multiplicative")
 #plot(ts_A_model, xlab= "")
 
-installbase_decomposed_df <- ts_df(ts_A_model$trend) %>%
+installbase_decomposed_df <- ts_df(ts_A_model$x) %>%
   left_join(ts_df(ts_A_model$seasonal), by = "time") %>%
-  rename(trend = value.x, seasonality = value.y)
+  rename(observed_value = value.x, seasonality = value.y)
+
+
 ```
 
 
 #### sales forecast
-Now assume the production experts inform us that although both will remain on the market for a while, the sales teams have been given the objective to focus their effort in selling *device B* over *device A* in the future. Therefore, they expect the sales to increase by 15% per year for the latter and to decrease by 30% a year for the former. This might be justified by financial or strategic reasons which is why I believe that in some cases, no statistical technique could outperform the business input for the purpose of estimating the trend component of the product's sales.
+Now suppose the production experts' view on the next two years is that the sales of *device A* will decrease by 20% per year while that of *device B* will increase by 20% next year and by 30% the year after.
+
+A simple linear forecast would look like:
+
+```{r}
+# Parameter:
+forecast_length = 2
+yearly_growth_A = .20
+
+# Variables:
+forecast_length_days = length(seq(from = max(installbase_decomposed_df$time) + ddays(1), to = max(installbase_decomposed_df$time) + dyears(forecast_length), by = "days"))
+
+daily_growth_A <- (1+yearly_growth_A)^(1/365)
+
+# Baseline scenario (linear trend extrapolated)
+
+linearmododel <- lm(observed_value~ time, installbase_decomposed_df)
+start_forecast_value <- predict(linearmododel)[length(installbase_decomposed_df$observed_value)]
+last_observed_value <- installbase_decomposed_df$observed_value[length(installbase_decomposed_df$observed_value)]
+
+installedbase_forecast <- data.frame(
+  time = c(installbase_decomposed_df$time,
+           seq(from = max(installbase_decomposed_df$time) + ddays(1), to = max(installbase_decomposed_df$time) + dyears(forecast_length), by = "days")
+  ),
+  observed_value = c(installbase_decomposed_df$observed_value, rep(NA,forecast_length_days)),
+  seasonality = c(installbase_decomposed_df$seasonality, rep(NA,forecast_length_days)),
+  predicted_value_business = c(
+    rep(NA, length(installbase_decomposed_df$observed_value) -1),
+    last_observed_value,
+    start_forecast_value*cumprod(rep(daily_growth_A, forecast_length_days)))
+)
+
+installedbase_forecast <- installedbase_forecast %>%
+  add_predictions(linearmododel, "predicted_values_lm")
+
+installedbase_forecast %>%
+  ggplot() +
+  geom_line(aes(x = time, y = observed_value)) +
+  geom_line(aes(x = time, y = predicted_value_business), color = "red", linetype = "dashed")
+
+```
+
+
+
+
+And enriching it with the seasonality we estimated from past data, we can make it look like:
+
+
+
 
 
 
