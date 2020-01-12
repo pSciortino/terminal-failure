@@ -1,7 +1,7 @@
 library(sn)
 library(truncnorm)
 
-set.seed(1)
+set.seed(1000)
 
 
 # Generate reparation dataset  ------------------------------------------
@@ -61,12 +61,15 @@ library(tidyverse)
 ### Sales dataset generation ---------
 
 
-probability_vector<-rep(c(rep(1,304),cumprod(c(1, rep(1.08, 60)))),3)*seq(from = 1, to = 4, length.out = 1095)
-#plot.ts(probability_vector)
+probability_vector<-
+  rep(c(rep(1,304),cumprod(rep(1.015, 61))),3) * seq(from = 1, to = 5, length.out = 1095)
 
-sales_df<-tibble(
-  device_model = c(rep("A", sales_A), rep("B", sales_B)),
-  date_sold = sample(seq(from = startdate, to = enddate, by = "day"), sales_A + sales_B, prob = probability_vector, replace = TRUE)
+plot.ts(probability_vector)
+
+sales_df<-data.frame(
+  device_model = c(rep("A", sales_A), rep("A", sales_B)),
+  date_sold = sample(seq(from = startdate, to = enddate, by = "day"), size = 3000, prob = probability_vector, replace = TRUE)
 ) %>%
   group_by(device_model, date_sold) %>%
   summarize(sales = n()) 
+

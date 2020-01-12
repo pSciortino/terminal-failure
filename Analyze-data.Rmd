@@ -26,15 +26,15 @@ library(modelr)
 ```
 ## Project summary
 
-Say the company we work for manufactures and sells electronic devices in a B2B context while offering after sales services. In some sectors, shutdown time might be extremely costly for clients and handling devices reparation requires maintening a sufficient stock at hand. Yet, producing and storing spare parts comes with a cost which is why inventory levels should be about just high enough to cover the demand. This project explores the idea of quantifying and forecasting the occurence of device failures and therefore the future reparation needs using as input historical data on reparations (as a proxy for failure occurences) and product sales.
+Say the company we work for manufactures and sells electronic devices in a B2B context while offering after sales services. In some sectors, shutdown time might be extremely costly for clients and handling device reparations requires maintening a sufficient stock of spare parts at hand. Yet, producing and storing those parts comes with a cost which is why inventory levels should be about just high enough to cover the demand. This project explores the idea of quantifying and forecasting the occurence of device failures and therefore the future reparation needs using as input historical data on product sales and reparations (as a proxy for failure occurences).
 
-Literature reviews on the topic [@van2019forecasting; @dekker2013use] stress the poor suitability of traditional time series forecasting for the task of predicting spare parts demand. A first challenge is that the occurence of failures is erratic and intermitent. Another is that our expectations on the number of failures should obviously take into account the number of devices currently on the market, which we will refer to as the *installed base*, but also the expected evolution of this installed base, rather than naïvely extrapolating patterns observed in historical failure data. 
+Literature reviews on the topic [@van2019forecasting; @dekker2013use] stress the poor performence of traditional time series forecasting methods for the task of predicting spare parts demand. A first challenge is that the occurence of failures is erratic and intermitent. Another is that our expectations on the number of failures should obviously take into account the number of devices currently on the market, which we will refer to as the *installed base*, as well as its expected evolution, rather than naïvely extrapolating patterns observed in historical failure data. 
 
-The method explored here will consist in three steps: First, a time-to-failure probability distribution will be estimated for each device part based on historical failure data. In a second phase, a forecast of future failures is performed based on the current state of the installed base by exploiting the fact that the expected number of part failures in time t is the sum of the individual probabilities to fail in time t for all parts in service. Finally, the exercise will be repeated in a setting where the future size and composition of the installed base can be estimated.
+The method explored here consists in three steps: First, a time-to-failure probability distribution will be estimated for each device part and failure type based on historical failure data. In a second phase, a forecast of future failures is performed based on the current state of the installed base by exploiting the fact that the expected number of part failures in time t is the sum of the individual probabilities to fail in time t for all parts in service. Finally, the exercise will be repeated in a setting where the future size and composition of the installed base is estimated.
 
 ### Literature takeaways
 
-The proposed method follows the literature's recommendations to think of the installed base as the driving factor for failures and therefore to exploit its current but also future state for the purpose of building expectations on future failures. Besides, it follows the subset of this literature that estimates time-to-failure probability distributions for each particular product instead of single-point estimates. What distinguishes the present attempt is the use of a non-parametric density estimation technique to build these probability distributions while generally a Weibull distribution is fitted. I also explore how statistical information can be combined with business knowledge to build pragmatic expectations on the future evolution of the installed base.
+The proposed method follows the literature's recommendations to think of the installed base as the driving factor for failures and therefore to exploit its current but also future state for the purpose of building expectations on future failures. Besides, it follows the subset of this literature that estimates time-to-failure probability distributions for each particular product instead of single-point estimates. What distinguishes the present attempt is the use of a non-parametric density estimation technique to build these probability distributions while generally a specific distribution is assumed. I also explore how statistical information can be combined with business knowledge to build pragmatic expectations on the future evolution of the installed base.
 
 ## Data generation
 
@@ -107,18 +107,19 @@ We already see some interesting patterns here, for example a lot of failures are
 * get a smooth distribution of when failures are likely to occur by getting rid of uninformative spikes;
 * get a vector of (relative) failure probabilities instead of frequencies. This is what we'll need for the forecasting part.
 
-By estimating those densities at the part - failure type level, we also keep the lowest level of granularity while leveraging the whole pool of training observations when an identical part is shared by multiple devices. 
+Besides, this frequency chart as well as any histogram or distribution directly drawn from it might suffer from a bias due to the right-censored nature of the time-to-failure dataset i.e. the fact that some devices have not failed yet. Suppose the vast majority of the devices containing the parts K01 have been sold in the 50 last days. Then the peak we observed on figure **x** might simply reflect the fact 
 
-We'll use a (Gaussian) Kernel density estimator to get the density functions we need. Let's first nest our dataset as follows:
+We'll use a version of the Kernel density estimator introduced by (**cite author**) in which kernels are weighted to counter this right censoring bias. The function *presmooth* does exactly that. 
 ```{r, echo=TRUE, warning =FALSE}
+# 1. Nest dataset so that each value in the column "data" is actually a 2-columns dataframe that records for each failure the lifetime at which it occured and the total number of devices from the corresponding model in the installed base.
+
 (failures_df_nested <- failures_df %>%
   select(-terminal_model) %>%
   group_by(part, part_code, failure_description) %>%
   nest())
 ```
-where each value in the column "data" is actually a 2-columns dataframe that records for each failure the lifetime at which it occured and the total number of devices from the corresponding model in the installed base. 
 
-The following function will be applied to the nested dataset to return for each row a dataframe that contains the density estimation for the device part at hand. While the lifetime at failure will be used to estimate the density of the survival time, the installed base information will be usefull to weigh down these densities so that they integrate to their respective likelihood instead of one.
+A function will be applied that returns for each pair (*part*; *failure type*) a probability distribution in the part's time-to-failure. While the observed lifetime at failure will be used to estimate time-to-failure densities, ratio $Nr(failed)/Nr(sold)$ will be used to weigh down these densities so that they integrate to the likelihood that corresponding failure occurs instead of one.
 ```{r, echo=TRUE, warning =FALSE}
 # Non-censored case
 get_weighted_density_df <- function(df) {
@@ -145,7 +146,9 @@ failures_densities_df_nested <- failures_df_nested %>%
   select(-data) 
 ```
 
-On this generated data, the kernel density estimator seems to do a pretty good job. Unlike a parametric density estimation method, the kernel density estimator is highly flexible which makes it able to fit the heterogeneous types of empirical distributions we could potentially encounter. That said, it has two potential drawbacks relative to an approach that assumes ex-ante a distribution for the density that is to be estimated: First, it risks *overfitting* when the number of training observations is low relative to the variance in the time-to-failure variable. This should not be a concern here given the amount of observations we have. A second possible drawback is that it is a slightly more *computation intensive* method. In a real-life scenario however, this can be mitigated by the fact that new data can be processed incrementally. Indeed, updating the density function only requires to add up the new kernels to the existing density provided that we properly weight the exising and new infomation to their respective share of total.
+Unlike a parametric density estimation method, the kernel density estimator is highly flexible which makes it able to fit the heterogeneous types of empirical distributions we could potentially encounter. 
+
+<!-- That said, it has two potential drawbacks relative to an approach that assumes ex-ante a distribution for the density that is to be estimated: First, it risks *overfitting* when the number of training observations is low relative to the variance in the time-to-failure variable. This should not be a concern here given the amount of observations we have. A second possible drawback is that it is a slightly more *computation intensive* method. In the case of a classical Kernel density estimator, this could be mitigated by the fact that new data can be processed incrementally. Indeed, updating the density function only requires to add up the new kernels to the existing density provided that we properly weight the exising and new infomation to their respective share of total. In the case of this specific version of the Kernel density estimator that makes it suited for right-censored data, I'm not such such incremental processing is possible because it seems that the weights given to each kernel should all be recomputed as new data comes in. -->
 
 ```{r, warning=FALSE, message = FALSE}
 failures_densities_df <- unnest(failures_densities_df_nested)
@@ -193,7 +196,7 @@ p3 <- failure_densities_bydevice %>%
 gridExtra::grid.arrange(p2, p3, ncol = 2, nrow = 1)
 ```
 
-Obtaining these device-specific lifetime probability distributions is the first step towards forecasting the reparation flow of our electronic devices. In what follows we'll see how these vectors of probabilities can be used for this purpose.
+Obtaining these device-specific lifetime probability distributions is the first step towards forecasting the occurence of failures. In what follows we'll see how these vectors of probabilities can be used for that purpose.
 
 ## Failure forecasting
 
@@ -246,7 +249,7 @@ get_timelinedf = function(start_date, df){
 
 Now we can aggregate these results per date and get our part failure forecast.
 
-```{r}
+```{r, warning= FALSE}
 forecast_df <- forecast_nested %>%
   mutate(expected_failure = map2(date_sold, density_est, get_timelinedf)) %>%
   select(-density_est) %>%
@@ -270,7 +273,7 @@ forecast_df %>%
 
 While forecasting the failures for the current installed base might be a realistic objective in the context of an end-of-life product, it is clear that the sales might continue, or even grow in the future. In this context, our model should be extended to take into account the fact that the installed base will keep evolving in terms of size and composition in the future.
 
-#### seasonality estimation
+#### Sales data analysis
 
 To integrate the notion of an evolving installed base, all we need is to enrich the historical sales data with  product-specific sales forecasts. My opinion is that the main part of this forecast must come from business experts, which is why I would exclude any purely statistical (time series forecasting) approach. However, I will explore how the business knowledge of future trends might be combined with seasonal patterns that we can extract from historical sales data in a hybrid approach.
 
@@ -278,11 +281,11 @@ Say our sales data look like this:
 ```{r}
 sales_df_monthly <- sales_df %>%
   group_by(device_model, yearmonth = strftime(date_sold, "%Y%m"), year = strftime(date_sold, "%Y"), month = strftime(date_sold, "%m")) %>%
-  summarize(monthly_sales = n()) %>%
+  summarize(monthly_sales = sum(sales)) %>%
   arrange(year, month) 
 
 peaks <- data.frame(
-  start = paste(seq(min(sales_df_monthly$year), max(sales_df_monthly$year),1),"11", sep=""),
+  start = paste(seq(min(sales_df_monthly$year), max(sales_df_monthly$year),1),"10", sep=""),
   end = as.character(as.numeric(paste(seq(min(sales_df_monthly$year), max(sales_df_monthly$year) ,1),"01", sep="")) + 100)
 )
 
@@ -299,73 +302,78 @@ sales_df_monthly %>%
 
 There is obviously some seasonality in the sales: client orders tend to be higher in the last two months of the year. It also seems that sales tend to increase over time. In what follows we use a multiplicative model to extract the cylical component from this series. Our goal will be to exploit it in the forecasting of future sales while letting the business figure out a plausible trend for each product's sales in the comming years.
 
-```{r}
-# focus on device A and transform the dataset in a time series object
-failures_A_series <- sales_df_monthly %>%
-  filter(device_model == "A")
-
-ts_A<-ts(failures_A_series$monthly_sales, frequency =12, start= c(year(startdate), day(startdate) - 1))
-
-# decompose time series
-ts_A_model<- decompose(ts_A, "multiplicative")
-#plot(ts_A_model, xlab= "")
-
-installbase_decomposed_df <- ts_df(ts_A_model$x) %>%
-  left_join(ts_df(ts_A_model$seasonal), by = "time") %>%
-  rename(observed_value = value.x, seasonality = value.y)
-
-
-```
-
 
 #### sales forecast
-Now suppose the production experts' view on the next two years is that the sales of *device A* will decrease by 20% per year while that of *device B* will increase by 20% next year and by 30% the year after.
-
-A simple linear forecast would look like:
 
 ```{r}
 # Parameter:
-forecast_length = 2
-yearly_growth_A = .20
+forecast_length_years = 2
+yearly_growth_A = -.2
+
+failures_A_series <- sales_df_monthly %>%
+  filter(device_model == "A") 
 
 # Variables:
-forecast_length_days = length(seq(from = max(installbase_decomposed_df$time) + ddays(1), to = max(installbase_decomposed_df$time) + dyears(forecast_length), by = "days"))
-
-daily_growth_A <- (1+yearly_growth_A)^(1/365)
-
-# Baseline scenario (linear trend extrapolated)
-
-linearmododel <- lm(observed_value~ time, installbase_decomposed_df)
-start_forecast_value <- predict(linearmododel)[length(installbase_decomposed_df$observed_value)]
-last_observed_value <- installbase_decomposed_df$observed_value[length(installbase_decomposed_df$observed_value)]
-
-installedbase_forecast <- data.frame(
-  time = c(installbase_decomposed_df$time,
-           seq(from = max(installbase_decomposed_df$time) + ddays(1), to = max(installbase_decomposed_df$time) + dyears(forecast_length), by = "days")
-  ),
-  observed_value = c(installbase_decomposed_df$observed_value, rep(NA,forecast_length_days)),
-  seasonality = c(installbase_decomposed_df$seasonality, rep(NA,forecast_length_days)),
-  predicted_value_business = c(
-    rep(NA, length(installbase_decomposed_df$observed_value) -1),
-    last_observed_value,
-    start_forecast_value*cumprod(rep(daily_growth_A, forecast_length_days)))
-)
-
-installedbase_forecast <- installedbase_forecast %>%
-  add_predictions(linearmododel, "predicted_values_lm")
-
-installedbase_forecast %>%
-  ggplot() +
-  geom_line(aes(x = time, y = observed_value)) +
-  geom_line(aes(x = time, y = predicted_value_business), color = "red", linetype = "dashed")
-
+length_observed <- length(failures_A_series$yearmonth)
+forecast_length_months = forecast_length_years*12
+monthly_growth_A = (1+yearly_growth_A)^(1/12)
 ```
+Now suppose the production experts' view on the next two years is that the sales of *device A* will `r ifelse(yearly_growth_A>0, "increase", "decrease")` by 20% per year while that of *device B* will increase by 20% next year and by 30% the year after.
+
+A simple linear forecast would look like:
+
+```{r, warning= FALSE}
+df <- failures_A_series %>%
+  mutate(yearmonthday = ymd(paste(yearmonth, "01", sep = "")))
+
+ts_A<-ts(failures_A_series$monthly_sales, frequency =12, start= c(year(startdate), day(startdate)))
+ts_A_model<- decompose(ts_A, "multiplicative")
 
 
+# append df to get a forecast df
+last_date <- tail(df$yearmonthday , 1)
+last_sales <- tail(df$monthly_sales, 1)
 
+df2 <- data.frame(
+  device_model = c(df$device_model, rep(df$device_model[1], forecast_length_months)),
+  yearmonth = c(df$yearmonthday, seq(from = ymd(last_date) + months(1), length.out = forecast_length_months, by= "month")),
+  sales = c(df$monthly_sales, rep(NA,forecast_length_months))
+) 
+  
+
+# Get starting point
+trendmodel <- lm(sales~ yearmonth, df2)
+df2 <- df2 %>%
+  add_predictions(trendmodel, "pred_trendmodel")
+start_pred_business <- df2$pred_trendmodel[length_observed + 1]
+
+df3 <- data.frame(
+  device_model = df2$device_model,
+  yearmonth = df2$yearmonth,
+  sales = df2$sales,
+  forecast_business = c(rep(NA, length_observed -1),
+                        last_sales,
+                        start_pred_business*cumprod(rep(monthly_growth_A, forecast_length_months))),
+  seasonality = c(rep(1,length_observed), rep(head(as.numeric(ts_A_model$seasonal), 12),forecast_length_years))
+) %>%
+  mutate(month = months(yearmonth), forecast_business_seasonalized = forecast_business* seasonality)
+
+df3 %>%
+  ggplot() +
+  geom_line(aes(x = yearmonth, y = sales)) +
+  geom_line(aes(x = yearmonth, y = forecast_business), color = "red", linetype = "dashed") +
+  labs(title = "Sales forecast - Product A", subtitle = "Business forecast", x = "")
+```
 
 And enriching it with the seasonality we estimated from past data, we can make it look like:
 
+```{r, warning=FALSE}
+df3 %>%
+  ggplot() +
+  geom_line(aes(x = yearmonth, y = sales)) +
+  geom_line(aes(x = yearmonth, y = forecast_business_seasonalized), color = "red", linetype = "dashed") +
+  labs(title = "Sales forecast - Product A", subtitle = "Enriched business forecast", x = "")
+```
 
 
 
