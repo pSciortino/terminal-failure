@@ -21,8 +21,8 @@ simulate_parts_failures <- function(part_code, nr_terminals){
   if (part_code == "K01"){
     df = data.frame(
       failure_description = rep("Key not responding", nr_terminals*.3),
-      lifetime_at_failure = c( rsn(n = nr_terminals*.15, omega = 20, alpha = 10, tau = 0),  #Skewed normal
-                               rsn(n = nr_terminals*.15, omega = -100, alpha = 5, tau = 10) + 300))  #Skewed normal
+      lifetime_at_failure = c( rsn(n = nr_terminals*.2, omega = 60, alpha = 10, tau = 0),  #Skewed normal
+                               rsn(n = nr_terminals*.1, omega = -100, alpha = 5, tau = 10) + 300))  #Skewed normal
   }
   if (part_code == "S01"){
     df = data.frame(
@@ -49,10 +49,6 @@ simulate_parts_failures <- function(part_code, nr_terminals){
 
 failures_df <- unnest(failures_df)
 
-#write.csv(failures_df, file = "failures_df.csv",row.names=FALSE)
-
-
-
 # Generate sales dataset  ----------------------------------------------
 
 library(lubridate)
@@ -62,7 +58,7 @@ library(tidyverse)
 
 
 probability_vector<-
-  rep(c(rep(1,304),cumprod(rep(1.015, 61))),3) * seq(from = 1, to = 5, length.out = 1095)
+  rep(c(rep(1,304),cumprod(rep(1.02, 61))),3) * seq(from = 1, to = 5, length.out = 1095)
 
 plot.ts(probability_vector)
 

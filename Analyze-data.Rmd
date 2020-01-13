@@ -308,7 +308,7 @@ There is obviously some seasonality in the sales: client orders tend to be highe
 ```{r}
 # Parameter:
 forecast_length_years = 2
-yearly_growth_A = -.2
+yearly_growth_A = -.3
 
 failures_A_series <- sales_df_monthly %>%
   filter(device_model == "A") 
@@ -372,11 +372,8 @@ df3 %>%
   ggplot() +
   geom_line(aes(x = yearmonth, y = sales)) +
   geom_line(aes(x = yearmonth, y = forecast_business_seasonalized), color = "red", linetype = "dashed") +
-  labs(title = "Sales forecast - Product A", subtitle = "Enriched business forecast", x = "")
+  labs(title = "Sales forecast - Product A", subtitle = "Enriched business forecast", x = "") 
 ```
-
-
-
 
 
 #### failures forecast
