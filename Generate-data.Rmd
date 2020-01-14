@@ -1,0 +1,203 @@
+---
+title: "Dataset generation: commented code"
+header-includes:
+   - \usepackage{amsmath}
+output: 
+  html_document:
+    collapse: no
+    df_print: paged
+---
+
+```{r setup, include=FALSE, message = FALSE}
+library(tidyverse)
+library(formattable)
+library(DT)
+library(kernhaz)
+library(survPresmooth)
+library(lubridate)
+library(ggpubr)
+library(tsbox)
+library(modelr)
+library(sn)
+library(truncnorm)
+```
+
+#### Parameters
+
+```{r, echo = TRUE}
+### Sales parameters ---------
+sales_A <- 2000
+startdate_A <- as.Date("2017/1/1")
+enddate_A <- as.Date("2019/12/31")
+
+sales_B <- 1000
+startdate_B <- as.Date("2018/1/1")
+enddate_B <- as.Date("2019/12/31")
+
+### Failures parameters ---------
+
+parts_A <- c("K01", "S01")
+failurerate_A = 0.80
+
+parts_B <- c("K02", "S01")
+failurerate_B = 0.75
+```
+
+Given these parameters, we can build the dataset that will serve as a basis for the remainder of this notebook. Most of what follows will consists in looping over this basic structure to enrich it with sales and failures data.
+
+```{r, echo = TRUE}
+(main_df <- tibble(
+  terminal_model = c(rep("A", length(parts_A)), rep("B", length(parts_B))),
+  total_sales = c(rep(sales_A, length(parts_A)), rep(sales_B, length(parts_B))),
+  from = c(rep(startdate_A, length(parts_A)), rep(startdate_B, length(parts_B))),
+  to = c(rep(enddate_A, length(parts_A)), rep(enddate_B, length(parts_B))),
+  part_code = c(parts_A, parts_B)
+))
+```
+
+## Generate sales
+
+For each device $i \in \{A,B\}$, a sequence of consecutive dates is generated from $startdate_i$  to $enddate_i$. Then, a sample of size $sales_i$ is randomly drawn with replacement from that sequence. Some trend and seasonality is deliberately created by the fact that at each stochastic iteration, the relative probability for a given date in the sequence to be picked depends on its position in the calendar year. 
+
+```{r}
+sales_period_A <- as.numeric(enddate_A - startdate_A) + 1
+sales_period_B <- as.numeric(enddate_B - startdate_B) + 1
+
+# for simplicity, let's assume A and B have the same total sales growth over their respective sales period (1 tot 5)
+probability_vector_A <-
+  rep(c(rep(1,304),cumprod(rep(1.02, 61))), sales_period_A/365) * seq(from = 1, to = 5, length.out = sales_period_A)
+
+probability_vector_B <-
+  rep(c(rep(1,304),cumprod(rep(1.02, 61))), sales_period_B/365) * seq(from = 1, to = 5, length.out = sales_period_B)
+
+par(mfrow=c(2,1))
+plot.ts(probability_vector_A, ylab = "relative probability", xlab = "position in sequence", main = "prob. vector device A")
+plot.ts(probability_vector_B, ylab = "relative probability", xlab = "position in sequence", main = "prob. vector device B")
+```
+
+Now I create and apply the function that generate the sales based on that logic :
+```{r}
+generate_sales <- function(totalsales, startdate, enddate){
+  
+  sales_period = as.numeric(enddate - startdate) + 1
+  probability_vector = rep(c(rep(1,304),cumprod(rep(1.02, 61))), sales_period/365) * seq(from = 1, to = 5, length.out = sales_period)
+  (sales <- sample(seq(from = startdate, to = enddate, by = "day"), size = sales_period, prob = probability_vector, replace = TRUE))
+}
+
+(main_df <- main_df %>%
+  mutate(sales_date = pmap(list(total_sales, from, to), generate_sales)) %>%
+  select(-c(from, to)))
+```
+
+## Generate failures
+
+In generating failures, I make the assumption that no part can live forever. Hence, each part $j$ of type $k \in \{"K01", "K02", "S01"\}$ has a theoretical time-to-failure $x_j$ that is randomly drawn from a part-specific life length distribution $\mathcal{D_k}$. Yet, this failure might not occur for two reasons:
+* A failure occured due to another part of the same device
+* The failure date has not been reached yet
+In this setting, a theoretical time to failure can be generated for each device i that contains a set of parts J_i as:
+
+$$ x_i = \min_{\forall j \in J_i}(x_j) $$
+
+where $x_j \sim \mathcal{D_k}$. I obtain the part-specific distributions $\mathcal{D_k}$ for $k \in \{"K01", "K02", "S01"\}$ by combining together skewed normal, truncated normal and uniform distributions. The goals here is to make these distributions heterogeneous and unpure enough so that methods based on over-simplifying assumptions are not misleadingly validated during the analysis phase.
+
+Finally, the *observed time-to-failure* for a device i is given by:
+\[
+    x^{obs}_i = 
+\begin{cases}
+    x_i& \text{if } creation\_date_i + x_i \leq today \\
+    \emptyset              & \text{otherwise}
+\end{cases}
+\]
+
+and the reparation date by:
+\[
+    reparation\_date_i = 
+\begin{cases}
+    creation\_date_i + x^{obs}_i& \text{if } creation\_date_i + x_i \leq today \\
+    \emptyset              & \text{otherwise}
+\end{cases}
+\]
+
+This brings the interesting feature of right-censoring that will have to be tackeled in the analysis part. Besides, it creates a more realistic training dataset where we don't have failure information for all devices that were sold in the past.
+
+
+```{r, warning= FALSE, message = FALSE}
+
+#Build function that draws theoretical times-to-failure
+
+simulate_parts_failures <- function(part_code){
+  if (part_code == "K01"){
+    df = data.frame(
+      failure_description = "Key not responding",
+      time_to_failure = sample(
+          c(rsn(n = 1, omega = 60, alpha = 10, tau = 0),  #Skewed normal
+            rsn(n = 1, omega = -100, alpha = 5, tau = 10) + 300), #Skewed normal
+            size = 1, 
+            prob = c(0.75,0.25)
+          )
+    )
+  }
+  if (part_code == "K02"){
+    df = data.frame(
+      failure_description = "Key not responding",
+      lifetime_at_failure = rsn(n = 1, omega = -100, alpha = 5, tau = 10) + 300  #Skewed normal
+    )
+  }
+  if (part_code == "S01"){
+    # might suffer from two types of failures
+    if (sample(c("type1", "type2"), 1) == "type1"){
+      df = data.frame(
+            failure_description = "Screen flickering",
+            lifetime_at_failure = sample(
+                c(rsn(n = 1, omega = -150, alpha = 10000, tau = .2) + 800, #Skewed normal
+                  rtruncnorm(n = 1, mean = 800, sd = 600, a = 800)), #Truncated normal (only variates above average are kept)
+                  size = 1,
+                  prob = c(0.25, 0.75)
+                )
+            )
+    }
+  }
+    if (sample(c("type1", "type2"), 1) == "type2"){
+      df = data.frame(
+            failure_description = "Screen shutdown",
+            lifetime_at_failure = runif(1, min = 1, max = 2500) # Uniform
+      )
+    }
+    
+  return(df)
+}
+
+(parts_df <- data.frame(
+  terminal_model = c(rep("A", length(parts_A)), rep("B", length(parts_B))),
+  parts = c(parts_A, parts_B)
+))
+
+
+# loop on this 
+
+from = as.Date("2017-01-01")
+to = as.Date("2019-12-31")
+model = "A"
+
+(temporary_df<- filter(parts_df, terminal_model == model) %>%
+mutate(from = from, to = to))
+  
+
+
+
+
+
+
+
+
+
+# transform maindf initial query in this?
+# (main_df <- tibble(
+#   terminal_model = c("A", "B"),
+#   total_sales = c(sales_A, sales_B),
+#   from = c(startdate_A, startdate_B),
+#   to = c(enddate_A, enddate_B)
+# )) 
+
+```
+
