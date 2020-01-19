@@ -1641,38 +1641,34 @@ summary {
 <div id="parameters" class="section level4">
 <h4>Parameters</h4>
 <pre class="r"><code>### Sales parameters ---------
-sales_A &lt;- 2000
+sales_A &lt;- 3000
 startdate_A &lt;- as.Date(&quot;2017/1/1&quot;)
 enddate_A &lt;- as.Date(&quot;2019/12/31&quot;)
 
-sales_B &lt;- 1000
+sales_B &lt;- 2000
 startdate_B &lt;- as.Date(&quot;2018/1/1&quot;)
 enddate_B &lt;- as.Date(&quot;2019/12/31&quot;)
 
-### Failures parameters ---------
+### Device parts parameters ---------
 
 parts_A &lt;- c(&quot;K01&quot;, &quot;S01&quot;)
-failurerate_A = 0.80
-
-parts_B &lt;- c(&quot;K02&quot;, &quot;S01&quot;)
-failurerate_B = 0.75</code></pre>
+parts_B &lt;- c(&quot;K02&quot;, &quot;S01&quot;)</code></pre>
 <p>Given these parameters, we can build the dataset that will serve as a basis for the remainder of this notebook. Most of what follows will consists in looping over this basic structure to enrich it with sales and failures data.</p>
 <pre class="r"><code>(main_df &lt;- tibble(
-  terminal_model = c(rep(&quot;A&quot;, length(parts_A)), rep(&quot;B&quot;, length(parts_B))),
-  total_sales = c(rep(sales_A, length(parts_A)), rep(sales_B, length(parts_B))),
-  from = c(rep(startdate_A, length(parts_A)), rep(startdate_B, length(parts_B))),
-  to = c(rep(enddate_A, length(parts_A)), rep(enddate_B, length(parts_B))),
-  part_code = c(parts_A, parts_B)
+  terminal_model = c(&quot;A&quot;, &quot;B&quot;),
+  total_sales = c(sales_A, sales_B),
+  from = c(startdate_A, startdate_B),
+  to = c(enddate_A, enddate_B)
 ))</code></pre>
 <div data-pagedtable="false">
 <script data-pagedtable-source type="application/json">
-{"columns":[{"label":["terminal_model"],"name":[1],"type":["chr"],"align":["left"]},{"label":["total_sales"],"name":[2],"type":["dbl"],"align":["right"]},{"label":["from"],"name":[3],"type":["date"],"align":["right"]},{"label":["to"],"name":[4],"type":["date"],"align":["right"]},{"label":["part_code"],"name":[5],"type":["chr"],"align":["left"]}],"data":[{"1":"A","2":"2000","3":"2017-01-01","4":"2019-12-31","5":"K01"},{"1":"A","2":"2000","3":"2017-01-01","4":"2019-12-31","5":"S01"},{"1":"B","2":"1000","3":"2018-01-01","4":"2019-12-31","5":"K02"},{"1":"B","2":"1000","3":"2018-01-01","4":"2019-12-31","5":"S01"}],"options":{"columns":{"min":{},"max":[10]},"rows":{"min":[10],"max":[10]},"pages":{}}}
+{"columns":[{"label":["terminal_model"],"name":[1],"type":["chr"],"align":["left"]},{"label":["total_sales"],"name":[2],"type":["dbl"],"align":["right"]},{"label":["from"],"name":[3],"type":["date"],"align":["right"]},{"label":["to"],"name":[4],"type":["date"],"align":["right"]}],"data":[{"1":"A","2":"3000","3":"2017-01-01","4":"2019-12-31"},{"1":"B","2":"2000","3":"2018-01-01","4":"2019-12-31"}],"options":{"columns":{"min":{},"max":[10]},"rows":{"min":[10],"max":[10]},"pages":{}}}
   </script>
 </div>
 </div>
 <div id="generate-sales" class="section level2">
 <h2>Generate sales</h2>
-<p>For each device <span class="math inline">\(i \in \{A,B\}\)</span>, a sequence of consecutive dates is generated from <span class="math inline">\(startdate_i\)</span> to <span class="math inline">\(enddate_i\)</span>. Then, a sample of size <span class="math inline">\(sales_i\)</span> is randomly drawn with replacement from that sequence. Some trend and seasonality is deliberately created by the fact that at each stochastic iteration, the relative probability for a given date in the sequence to be picked depends on its position in the calendar year.</p>
+<p>For each device model <span class="math inline">\(\mathcal{M} \in \{A,B\}\)</span>, a sequence of consecutive dates is generated from <span class="math inline">\(startdate_{M}\)</span> to <span class="math inline">\(enddate_M\)</span>. Then, a sample of size <span class="math inline">\(sales_M\)</span> is randomly drawn with replacement from that sequence. Some trend and seasonality is deliberately created by the fact that at each stochastic iteration, the relative probability for a given date in the sequence to be picked depends on its position in the calendar year.</p>
 <pre class="r"><code>sales_period_A &lt;- as.numeric(enddate_A - startdate_A) + 1
 sales_period_B &lt;- as.numeric(enddate_B - startdate_B) + 1
 
@@ -1692,56 +1688,65 @@ plot.ts(probability_vector_B, ylab = &quot;relative probability&quot;, xlab = &q
   
   sales_period = as.numeric(enddate - startdate) + 1
   probability_vector = rep(c(rep(1,304),cumprod(rep(1.02, 61))), sales_period/365) * seq(from = 1, to = 5, length.out = sales_period)
-  (sales &lt;- sample(seq(from = startdate, to = enddate, by = &quot;day&quot;), size = sales_period, prob = probability_vector, replace = TRUE))
+  (sales &lt;- sample(seq(from = startdate, to = enddate, by = &quot;day&quot;), size = totalsales, prob = probability_vector, replace = TRUE))
 }
 
 (main_df &lt;- main_df %&gt;%
-  mutate(sales_date = pmap(list(total_sales, from, to), generate_sales)) %&gt;%
+  mutate(date_sold = pmap(list(total_sales, from, to), generate_sales)) %&gt;%
   select(-c(from, to)))</code></pre>
 <div data-pagedtable="false">
 <script data-pagedtable-source type="application/json">
-{"columns":[{"label":["terminal_model"],"name":[1],"type":["chr"],"align":["left"]},{"label":["total_sales"],"name":[2],"type":["dbl"],"align":["right"]},{"label":["part_code"],"name":[3],"type":["chr"],"align":["left"]},{"label":["sales_date"],"name":[4],"type":["list"],"align":["right"]}],"data":[{"1":"A","2":"2000","3":"K01","4":"<date [1,095]>"},{"1":"A","2":"2000","3":"S01","4":"<date [1,095]>"},{"1":"B","2":"1000","3":"K02","4":"<date [730]>"},{"1":"B","2":"1000","3":"S01","4":"<date [730]>"}],"options":{"columns":{"min":{},"max":[10]},"rows":{"min":[10],"max":[10]},"pages":{}}}
+{"columns":[{"label":["terminal_model"],"name":[1],"type":["chr"],"align":["left"]},{"label":["total_sales"],"name":[2],"type":["dbl"],"align":["right"]},{"label":["date_sold"],"name":[3],"type":["list"],"align":["right"]}],"data":[{"1":"A","2":"3000","3":"<date [3,000]>"},{"1":"B","2":"2000","3":"<date [2,000]>"}],"options":{"columns":{"min":{},"max":[10]},"rows":{"min":[10],"max":[10]},"pages":{}}}
   </script>
 </div>
 </div>
 <div id="generate-failures" class="section level2">
 <h2>Generate failures</h2>
-<p>In generating failures, I make the assumption that no part can live forever. Hence, each part <span class="math inline">\(j\)</span> of type <span class="math inline">\(k \in \{&quot;K01&quot;, &quot;K02&quot;, &quot;S01&quot;\}\)</span> has a theoretical time-to-failure <span class="math inline">\(x_j\)</span> that is randomly drawn from a part-specific life length distribution <span class="math inline">\(\mathcal{D_k}\)</span>. Yet, this failure might not occur for two reasons: * A failure occured due to another part of the same device * The failure date has not been reached yet In this setting, a theoretical time to failure can be generated for each device i that contains a set of parts J_i as:</p>
-<p><span class="math display">\[ x_i = \min_{\forall j \in J_i}(x_j) \]</span></p>
-<p>where <span class="math inline">\(x_j \sim \mathcal{D_k}\)</span>. I obtain the part-specific distributions <span class="math inline">\(\mathcal{D_k}\)</span> for <span class="math inline">\(k \in \{&quot;K01&quot;, &quot;K02&quot;, &quot;S01&quot;\}\)</span> by combining together skewed normal, truncated normal and uniform distributions. The goals here is to make these distributions heterogeneous and unpure enough so that methods based on over-simplifying assumptions are not misleadingly validated during the analysis phase.</p>
-<p>Finally, the <em>observed time-to-failure</em> for a device i is given by: <span class="math display">\[
+<p>In generating failures, I make the assumption that no part can live forever. Hence, each part <span class="math inline">\(j\)</span> of type <span class="math inline">\(k \in \{&quot;K01&quot;, &quot;K02&quot;, &quot;S01&quot;\}\)</span> has a theoretical time-to-failure <span class="math inline">\(x_j^{theoretical}\)</span> that is randomly drawn from a part-specific life length distribution <span class="math inline">\(\mathcal{D_k}\)</span>. Yet, this failure might not occur for two reasons:</p>
+<ul>
+<li>A failure occured due to another part of the same device</li>
+<li>The failure date has not been reached yet</li>
+</ul>
+<p>In this setting, the <em>observed time-to-failure</em> can be generated for each device <span class="math inline">\(i\)</span> that contains a set of parts <span class="math inline">\(J_i\)</span> as:</p>
+<p><span class="math display">\[
     x^{obs}_i = 
 \begin{cases}
-    x_i&amp; \text{if } creation\_date_i + x_i \leq today \\
+     x_i = \min_{j \space \in J_i}(x_j^{theoretical})&amp; \text{if } \space date\_sold_i + x_i \leq today \\
     \emptyset              &amp; \text{otherwise}
 \end{cases}
-\]</span></p>
-<p>and the reparation date by: <span class="math display">\[
+\]</span> where <span class="math inline">\(x_j^{theoretical} \sim \mathcal{D_k}\)</span>.</p>
+<p>Then, the <em>reparation date</em> field is filled as follows: <span class="math display">\[
     reparation\_date_i = 
 \begin{cases}
-    creation\_date_i + x^{obs}_i&amp; \text{if } creation\_date_i + x_i \leq today \\
+    date\_sold_i + x^{obs}_i&amp; \text{if } \space \exists \space x_i^{obs}\\
     \emptyset              &amp; \text{otherwise}
 \end{cases}
-\]</span></p>
-<p>This brings the interesting feature of right-censoring that will have to be tackeled in the analysis part. Besides, it creates a more realistic training dataset where we don’t have failure information for all devices that were sold in the past.</p>
-<pre class="r"><code>#Build function that draws theoretical times-to-failure
+\]</span> I obtain the part-specific distributions <span class="math inline">\(\mathcal{D_k}\)</span> for <span class="math inline">\(k \in \{&quot;K01&quot;, &quot;K02&quot;, &quot;S01&quot;\}\)</span> by combining together skewed normal, truncated normal and uniform distributions. The goals here is to make these distributions heterogeneous and “unpure” enough so that methods based on over-simplifying assumptions are not misleadingly validated during the analysis phase.</p>
+<p>This process also brings in the realistic challenge of right-censoring : we are less likely to observe the time-to-failure of longer-living devices. If not tackeled carefully, this could easily be a source of bias in the analysis.</p>
+<pre class="r"><code># Build function able to loop on part_codes and draw individual theoretical times-to-failure
 
-simulate_parts_failures &lt;- function(part_code){
+generate_parts_failures &lt;- function(part_code){
   if (part_code == &quot;K01&quot;){
     df = data.frame(
       failure_description = &quot;Key not responding&quot;,
-      time_to_failure = sample(
+      timetofailure_theoretical = sample(
           c(rsn(n = 1, omega = 60, alpha = 10, tau = 0),  #Skewed normal
-            rsn(n = 1, omega = -100, alpha = 5, tau = 10) + 300), #Skewed normal
+            rsn(n = 1, omega = -100, alpha = 5, tau = 10) + 400, #Skewed normal
+            runif(1, min = 1, max = 5000)), # Uniform
             size = 1, 
-            prob = c(0.75,0.25)
+            prob = c(0.15,0.05, 0.8)
           )
     )
   }
   if (part_code == &quot;K02&quot;){
     df = data.frame(
       failure_description = &quot;Key not responding&quot;,
-      lifetime_at_failure = rsn(n = 1, omega = -100, alpha = 5, tau = 10) + 300  #Skewed normal
+      timetofailure_theoretical = sample(
+          c(rsn(n = 1, omega = -100, alpha = 5, tau = 10) + 400, #Skewed normal
+            runif(1, min = 1, max = 7000)), # Uniform
+            size = 1, 
+            prob = c(0.05, 0.95)
+          )
     )
   }
   if (part_code == &quot;S01&quot;){
@@ -1749,7 +1754,7 @@ simulate_parts_failures &lt;- function(part_code){
     if (sample(c(&quot;type1&quot;, &quot;type2&quot;), 1) == &quot;type1&quot;){
       df = data.frame(
             failure_description = &quot;Screen flickering&quot;,
-            lifetime_at_failure = sample(
+            timetofailure_theoretical = sample(
                 c(rsn(n = 1, omega = -150, alpha = 10000, tau = .2) + 800, #Skewed normal
                   rtruncnorm(n = 1, mean = 800, sd = 600, a = 800)), #Truncated normal (only variates above average are kept)
                   size = 1,
@@ -1757,37 +1762,70 @@ simulate_parts_failures &lt;- function(part_code){
                 )
             )
     }
-  }
-    if (sample(c(&quot;type1&quot;, &quot;type2&quot;), 1) == &quot;type2&quot;){
+    else{
       df = data.frame(
             failure_description = &quot;Screen shutdown&quot;,
-            lifetime_at_failure = runif(1, min = 1, max = 2500) # Uniform
+            timetofailure_theoretical = runif(1, min = 1, max = 2500) # Uniform
       )
     }
-    
-  return(df)
+  }  
+  return(df %&gt;% filter(timetofailure_theoretical &gt;=0))
 }
 
-(parts_df &lt;- data.frame(
+
+
+# Build function that, applied to main_df unnested:
+# 1. splits a device in its parts;
+# 2. applies the function generate_parts_failures() for each part; 
+# 3. computes the observed time-to-failure
+# 4. computes the reparation date (when)
+
+parts_df &lt;- data.frame(
   terminal_model = c(rep(&quot;A&quot;, length(parts_A)), rep(&quot;B&quot;, length(parts_B))),
-  parts = c(parts_A, parts_B)
-))</code></pre>
+  part_code = c(parts_A, parts_B)
+)
+
+generate_reparation_dates &lt;- function(model, date_sold){
+  
+  temporary_df&lt;- filter(parts_df, terminal_model == model) %&gt;%
+  mutate(date_sold = date_sold)
+  
+  observed_failure &lt;- temporary_df %&gt;%
+  mutate(timetofailure_theoretical = map(part_code, generate_parts_failures)) %&gt;%
+  unnest() %&gt;%
+  top_n(-1, timetofailure_theoretical) %&gt;% 
+  mutate(failure_date = as.Date(
+    ifelse(date_sold + ddays(timetofailure_theoretical) &lt; Sys.time(), 
+           as.Date(date_sold + ddays(timetofailure_theoretical)),
+           NA),
+    origin=&quot;1970-01-01&quot;)) %&gt;%
+  mutate(failure_description = ifelse(is.na(failure_date), NA, failure_description)) %&gt;%
+  select(failure_description, failure_date)
+  
+  return(observed_failure)
+}
+
+## Apply the function:
+
+source_df &lt;- main_df %&gt;%
+  unnest() %&gt;%
+  mutate(reparation_date = map2(terminal_model, date_sold, generate_reparation_dates)) %&gt;%
+  unnest()
+
+source_df %&gt;%
+  head(100)</code></pre>
 <div data-pagedtable="false">
 <script data-pagedtable-source type="application/json">
-{"columns":[{"label":["terminal_model"],"name":[1],"type":["fctr"],"align":["left"]},{"label":["parts"],"name":[2],"type":["fctr"],"align":["left"]}],"data":[{"1":"A","2":"K01"},{"1":"A","2":"S01"},{"1":"B","2":"K02"},{"1":"B","2":"S01"}],"options":{"columns":{"min":{},"max":[10]},"rows":{"min":[10],"max":[10]},"pages":{}}}
+{"columns":[{"label":["terminal_model"],"name":[1],"type":["chr"],"align":["left"]},{"label":["total_sales"],"name":[2],"type":["dbl"],"align":["right"]},{"label":["date_sold"],"name":[3],"type":["date"],"align":["right"]},{"label":["failure_description"],"name":[4],"type":["chr"],"align":["left"]},{"label":["failure_date"],"name":[5],"type":["date"],"align":["right"]}],"data":[{"1":"A","2":"3000","3":"2017-03-29","4":"Key not responding","5":"2018-09-12"},{"1":"A","2":"3000","3":"2019-09-14","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-07-11","4":"Key not responding","5":"2018-09-25"},{"1":"A","2":"3000","3":"2018-12-29","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-12-18","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-10-25","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-08-21","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-02-11","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-12-03","4":"Key not responding","5":"2019-03-29"},{"1":"A","2":"3000","3":"2019-10-27","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-01-21","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-03-14","4":"Key not responding","5":"2019-05-18"},{"1":"A","2":"3000","3":"2019-06-03","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-04-04","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-11-20","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-05-14","4":"Key not responding","5":"2019-10-13"},{"1":"A","2":"3000","3":"2018-10-06","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-06-03","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-11-18","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-09-27","4":"Key not responding","5":"2019-01-15"},{"1":"A","2":"3000","3":"2019-12-15","4":"Key not responding","5":"2019-12-24"},{"1":"A","2":"3000","3":"2018-10-14","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-08-31","4":"Key not responding","5":"2019-10-28"},{"1":"A","2":"3000","3":"2017-12-21","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-03-29","4":"Key not responding","5":"2019-06-19"},{"1":"A","2":"3000","3":"2019-12-28","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-07-27","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-03-03","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-12-31","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-10-01","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-12-31","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-11-28","4":"Key not responding","5":"2018-08-14"},{"1":"A","2":"3000","3":"2017-12-27","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-11-23","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-05-17","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-07-01","4":"Key not responding","5":"2017-07-17"},{"1":"A","2":"3000","3":"2019-05-05","4":"Key not responding","5":"2019-09-05"},{"1":"A","2":"3000","3":"2019-12-12","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-08-20","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-12-21","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-05-31","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-12-31","4":"Key not responding","5":"2020-01-08"},{"1":"A","2":"3000","3":"2019-03-25","4":"Key not responding","5":"2019-04-13"},{"1":"A","2":"3000","3":"2017-07-15","4":"Screen flickering","5":"2019-08-19"},{"1":"A","2":"3000","3":"2019-02-27","4":"Screen shutdown","5":"2019-12-11"},{"1":"A","2":"3000","3":"2019-12-15","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-07-20","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-10-20","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-08-13","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-11-18","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-03-02","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-12-13","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-03-04","4":"Key not responding","5":"2017-06-13"},{"1":"A","2":"3000","3":"2017-10-04","4":"Key not responding","5":"2020-01-16"},{"1":"A","2":"3000","3":"2018-11-18","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-09-08","4":"Key not responding","5":"2018-09-15"},{"1":"A","2":"3000","3":"2018-05-05","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-08-03","4":"Key not responding","5":"2019-10-23"},{"1":"A","2":"3000","3":"2019-09-01","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-03-12","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-03-15","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-12-26","4":"Screen flickering","5":"2019-07-16"},{"1":"A","2":"3000","3":"2017-05-20","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-11-17","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-12-22","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-09-11","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-12-08","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-12-02","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-07-15","4":"Key not responding","5":"2019-09-08"},{"1":"A","2":"3000","3":"2019-04-29","4":"Screen shutdown","5":"2019-11-14"},{"1":"A","2":"3000","3":"2018-11-28","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-10-02","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-01-15","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-06-23","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-03-25","4":"Key not responding","5":"2018-04-24"},{"1":"A","2":"3000","3":"2018-08-07","4":"Key not responding","5":"2018-10-12"},{"1":"A","2":"3000","3":"2019-06-26","4":"Screen shutdown","5":"2019-09-24"},{"1":"A","2":"3000","3":"2018-06-16","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-11-03","4":"Key not responding","5":"2017-11-13"},{"1":"A","2":"3000","3":"2019-03-22","4":"Key not responding","5":"2019-08-28"},{"1":"A","2":"3000","3":"2018-12-06","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-09-26","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-05-15","4":"Screen shutdown","5":"2019-05-25"},{"1":"A","2":"3000","3":"2019-08-20","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-05-05","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-12-28","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-07-11","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2018-06-26","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-05-29","4":"Screen flickering","5":"2019-11-26"},{"1":"A","2":"3000","3":"2019-05-03","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2017-08-02","4":"Key not responding","5":"2017-09-04"},{"1":"A","2":"3000","3":"2018-12-19","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-12-03","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-02-07","4":"Key not responding","5":"2019-07-17"},{"1":"A","2":"3000","3":"2018-12-31","4":"Key not responding","5":"2019-02-12"},{"1":"A","2":"3000","3":"2019-04-14","4":"Key not responding","5":"2019-09-16"},{"1":"A","2":"3000","3":"2019-05-12","4":"Key not responding","5":"2019-05-22"},{"1":"A","2":"3000","3":"2019-01-10","4":"NA","5":"<NA>"},{"1":"A","2":"3000","3":"2019-06-01","4":"Key not responding","5":"2019-10-31"},{"1":"A","2":"3000","3":"2018-10-03","4":"Screen shutdown","5":"2019-09-14"}],"options":{"columns":{"min":{},"max":[10]},"rows":{"min":[10],"max":[10]},"pages":{}}}
   </script>
 </div>
-<pre class="r"><code># loop on this 
-
-from = as.Date(&quot;2017-01-01&quot;)
-to = as.Date(&quot;2019-12-31&quot;)
-model = &quot;A&quot;
-
-(temporary_df&lt;- filter(parts_df, terminal_model == model) %&gt;%
-mutate(from = from, to = to))</code></pre>
+<p>Here is a summary of the observed failures in the obtained dataset.</p>
+<pre class="r"><code>source_df %&gt;%
+  group_by(failure_description) %&gt;%
+  summarize(n = n())</code></pre>
 <div data-pagedtable="false">
 <script data-pagedtable-source type="application/json">
-{"columns":[{"label":["terminal_model"],"name":[1],"type":["fctr"],"align":["left"]},{"label":["parts"],"name":[2],"type":["fctr"],"align":["left"]},{"label":["from"],"name":[3],"type":["date"],"align":["right"]},{"label":["to"],"name":[4],"type":["date"],"align":["right"]}],"data":[{"1":"A","2":"K01","3":"2017-01-01","4":"2019-12-31"},{"1":"A","2":"S01","3":"2017-01-01","4":"2019-12-31"}],"options":{"columns":{"min":{},"max":[10]},"rows":{"min":[10],"max":[10]},"pages":{}}}
+{"columns":[{"label":["failure_description"],"name":[1],"type":["chr"],"align":["left"]},{"label":["n"],"name":[2],"type":["int"],"align":["right"]}],"data":[{"1":"Key not responding","2":"757"},{"1":"Screen flickering","2":"80"},{"1":"Screen shutdown","2":"315"},{"1":"NA","2":"3848"}],"options":{"columns":{"min":{},"max":[10]},"rows":{"min":[10],"max":[10]},"pages":{}}}
   </script>
 </div>
 </div>
