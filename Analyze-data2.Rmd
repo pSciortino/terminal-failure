@@ -1,0 +1,147 @@
+---
+title: "Forecasting payment terminals failure"
+author: "Patrick"
+date: "1/19/2020"
+output:
+  pdf_document:
+    # toc: yes
+    # toc_depth: '2'
+  html_document:
+    collapse: no
+    df_print: paged
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+bibliography: bibliography.bibtex
+---
+
+```{r setup, include=FALSE, message = FALSE}
+library(tidyverse)
+library(formattable)
+library(DT)
+library(kernhaz)
+library(survPresmooth)
+library(lubridate)
+library(ggpubr)
+library(tsbox)
+library(modelr)
+library(kableExtra)
+```
+
+```{r, include = FALSE}
+### Sales parameters ---------
+sales_A <- 3000
+startdate_A <- as.Date("2017/1/1")
+enddate_A <- as.Date("2019/12/31")
+
+sales_B <- 2000
+startdate_B <- as.Date("2018/1/1")
+enddate_B <- as.Date("2019/12/31")
+
+### Device parts parameters ---------
+
+parts_A <- c("K01", "S01")
+parts_B <- c("K02", "S01")
+```
+
+## Project summary
+
+Say the company we work for manufactures and sells electronic devices in a B2B context while offering after sales services. In some sectors, shutdown time might be extremely costly for clients and handling device reparations requires maintening a sufficient stock of spare parts at hand. Yet, producing and storing those parts comes with a cost which is why inventory levels should be about just high enough to cover the demand. This project explores the idea of quantifying and forecasting the occurence of device failures and therefore the future reparation needs using as input historical data on product sales and reparations (as a proxy for failure occurences).
+
+Literature reviews on the topic [@van2019forecasting; @dekker2013use] stress the poor performence of traditional time series forecasting methods for the task of predicting spare parts demand. A first challenge is that the occurence of failures is erratic and intermitent. Another is that our expectations on the number of failures should obviously take into account the number of devices currently on the market, which we will refer to as the *installed base*, as well as its expected evolution, rather than naïvely extrapolating patterns observed in historical failure data. 
+
+The method explored here consists in three steps: First, a time-to-failure probability distribution will be estimated for each device part and failure type based on historical failure data. In a second phase, a forecast of future failures is performed based on the current state of the installed base by exploiting the fact that the expected number of part failures in time t is the sum of the individual probabilities to fail in time t for all parts in service. Finally, the exercise will be repeated in a setting where the future size and composition of the installed base is estimated.
+
+### Literature takeaways
+
+The proposed method follows the literature's recommendations to think of the installed base as the driving factor for failures and therefore to exploit its current but also future state for the purpose of building expectations on future failures. Besides, it follows the subset of this literature that estimates time-to-failure probability distributions for each particular product instead of single-point estimates. What distinguishes the present attempt is the use of a non-parametric density estimation technique to build these probability distributions while generally a specific distribution is assumed. I also explore how statistical information can be combined with business knowledge to build pragmatic expectations on the future evolution of the installed base.
+
+## Data
+```{r, echo = FALSE}
+source_df <- read.csv("source_df.csv")
+```
+
+The data used as source for the analysis is generated for the purpose of this project (see `Dataset generation: commented code`). The minimum requirement for this methodology to work is that one can gather the following information for (most) devices that have been sold in the past:
+
+* its model;
+* the date at which it has been sold;
+* the reparation date, if any;
+* the description of the failure (i.e. part that failed and reason), if any.
+
+The dataset used here contains `r nrow(source_df)` records of that type. In total, `r sales_A` devices of model `A` were sold between `r format(startdate_A, "%B %d %Y")` and `r format(enddate_A, "%B %d %Y")` and `r sales_B` devices of model `B` were sold between `r format(startdate_B, "%B %d %Y")` and `r format(enddate_B, "%B %d %Y")`. For example, the 5 first lines of the dataset look like:
+```{r, echo = FALSE}
+source_df %>%
+  head(5) %>%
+  kable("latex", booktabs = T) %>%
+  kable_styling(position = "center")
+```
+
+were *failure_description* and *failure_date* take the value `NA` for devices that have not been sent back for reparation. `r length(unique(source_df$failure_description))` different types of failures were recorded with the following frequency:
+
+```{r, echo = FALSE, warning=FALSE,message=FALSE}
+source_df %>%
+  group_by(failure_description) %>%
+  summarize(n = n()) %>%
+  kable("latex", booktabs = T) %>%
+  kable_styling(position = "center")
+```
+
+
+## Exploration and density estimation
+
+Now let's start exploring the dataset as if we didn't know its generating process. First we'd be interested in understanding the lifetime at which failures generally occur. A first look reveals that the typical time-to-failure is quite different from part to part, hence from device to device.
+
+
+```{r, echo = FALSE, warning=FALSE, message=FALSE}
+source_df$date_sold <- as.Date(source_df$date_sold)
+source_df$date_repaired <- as.Date(source_df$date_repaired)
+source_df
+source_df <- source_df %>%
+  mutate(time_to_failure = as.numeric(difftime(ymd(date_repaired), ymd(date_sold), units = "days"))) %>%
+  mutate(
+    part = ifelse(str_detect(part_code,"K"), "Keyboard", "Screen")
+  )
+
+(p0 <- source_df %>%
+  ggplot(aes(time_to_failure)) + geom_histogram(aes(fill=failure_description), binwidth = 1) +
+  facet_wrap(~part_code, ncol = 1) +
+  theme_light()  + ylab("frequency") + xlab("lifetime at failure (days)") +
+  ylim(0,15))
+```
+
+We already see some interesting patterns here, for example a lot of failures are recorded in the first 150 days of life for the part *K01*, while failure seems more spead for other parts, but it's quite hard to tell more at this point. A way to make more sense of these spiky frequencies is to estimate failure-specific density distributions. The obtained density distributions will have two advantages:
+
+* get a smooth distribution of when failures are likely to occur by getting rid of uninformative spikes;
+* get a vector of (relative) failure probabilities instead of frequencies. This is what we'll need for the forecasting part.
+
+Besides, the previous frequency chart as well as any histogram or density function directly drawn from it might suffer from a bias due to the right-censored nature of the time-to-failure dataset i.e. the fact that some devices have not failed yet. Suppose the vast majority of the devices containing the parts K01 have been sold in the 50 last days. Then the peak we observed on figure **x** might simply reflect the fact most of the devices about which we know the reparation date are relatively young.
+
+We'll use a version of the Kernel density estimator introduced by (**cite author**) in which kernels are weighted to counter this right censoring bias. The function `presmooth` does exactly that. 
+
+```{r, echo = FALSE, warning=FALSE, message=FALSE}
+# 1. Nest dataset so that each value in the column "data" is actually a 2-columns dataframe that records for each failure the lifetime at which it occured and the total number of devices from the corresponding model in the installed base.
+(source_df_nested <- source_df %>%
+  select(-terminal_model) %>%
+  group_by(part, part_code, failure_description) %>%
+  filter(!is.na(failure_description)) %>%
+  nest())
+```
+
+A function will be applied that returns for each pair (*part*; *failure type*) a probability distribution in the part's time-to-failure.
+```{r, echo = FALSE, warning=FALSE, message=FALSE}
+get_weighted_presmooth_density_df  <- function(df) {
+  
+  kdensity <- presmooth(times = df[["time_to_failure"]], status = rep(1,length(df[["time_to_failure"]])), estimand = "f", x.est = seq(0,3000, by=1), bw.selec = "plug-in")
+  data.frame(
+    life_length = kdensity$x.est,
+    weighted_density = kdensity$estimate
+  )
+}
+
+densities_df <- source_df_nested %>%
+  mutate(density_est = map(data, get_weighted_presmooth_density_df)) %>%
+  select(-data) 
+```
+
+## References
+
