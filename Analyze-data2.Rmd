@@ -52,9 +52,9 @@ Literature reviews on the topic [@van2019forecasting; @dekker2013use] stress the
 
 The method explored here consists in three steps: First, a time-to-failure probability distribution will be estimated for each device part and failure type based on historical failure data. In a second phase, a forecast of future failures is performed based on the current state of the installed base by exploiting the fact that the expected number of part failures in time t is the sum of the individual probabilities to fail in time t for all parts in service. Finally, the exercise will be repeated in a setting where the future size and composition of the installed base is estimated.
 
-### Literature takeaways
+<!-- ### Literature takeaways -->
 
-The proposed method follows the literature's recommendations to think of the installed base as the driving factor for failures and therefore to exploit its current but also future state for the purpose of building expectations on future failures. Besides, it follows the subset of this literature that estimates time-to-failure probability distributions for each particular product instead of single-point estimates. What distinguishes the present attempt is the use of a non-parametric density estimation technique to build these probability distributions while generally a specific distribution is assumed. I also explore how statistical information can be combined with business knowledge to build pragmatic expectations on the future evolution of the installed base.
+<!-- The proposed method follows the literature's recommendations to think of the installed base as the driving factor for failures and therefore to exploit its current but also future state for the purpose of building expectations on future failures. Besides, it follows the subset of this literature that estimates time-to-failure probability distributions for each particular product instead of single-point estimates. What distinguishes the present attempt is the use of a non-parametric density estimation technique to build these probability distributions while generally a specific distribution is assumed. I also explore how statistical information can be combined with business knowledge to build pragmatic expectations on the future evolution of the installed base. -->
 
 ## Data
 ```{r, echo = FALSE}
@@ -68,22 +68,22 @@ The data used as source for the analysis is generated for the purpose of this pr
 * the reparation date, if any;
 * the description of the failure (i.e. part that failed and reason), if any.
 
-The dataset used here contains `r nrow(source_df)` records of that type. In total, `r sales_A` devices of model `A` were sold between `r format(startdate_A, "%B %d %Y")` and `r format(enddate_A, "%B %d %Y")` and `r sales_B` devices of model `B` were sold between `r format(startdate_B, "%B %d %Y")` and `r format(enddate_B, "%B %d %Y")`. For example, the 5 first lines of the dataset look like:
+The dataset used here contains `r nrow(source_df)` records of that type (see first 5 records on Table 1). In total, `r sales_A` devices of model `A` were sold between `r format(startdate_A, "%B %d %Y")` and `r format(enddate_A, "%B %d %Y")` and `r sales_B` devices of model `B` were sold between `r format(startdate_B, "%B %d %Y")` and `r format(enddate_B, "%B %d %Y")`. In total, `r length(unique(source_df$failure_description))` different types of failures were recorded with the following frequencies listed in Table 2.
 ```{r, echo = FALSE}
 source_df %>%
   head(5) %>%
-  kable("latex", booktabs = T) %>%
-  kable_styling(position = "center")
+  kable("latex", booktabs = T, caption = "Dataset") %>%
+  kable_styling(position = "center", latex_options = "HOLD_position")
 ```
 
-were *failure_description* and *failure_date* take the value `NA` for devices that have not been sent back for reparation. `r length(unique(source_df$failure_description))` different types of failures were recorded with the following frequency:
+
 
 ```{r, echo = FALSE, warning=FALSE,message=FALSE}
 source_df %>%
   group_by(failure_description) %>%
   summarize(n = n()) %>%
-  kable("latex", booktabs = T) %>%
-  kable_styling(position = "center")
+  kable("latex", booktabs = T, caption = "Failures frequency") %>%
+  kable_styling(position = "center", latex_options = "HOLD_position")
 ```
 
 
@@ -91,11 +91,10 @@ source_df %>%
 
 Now let's start exploring the dataset as if we didn't know its generating process. First we'd be interested in understanding the lifetime at which failures generally occur. A first look reveals that the typical time-to-failure is quite different from part to part, hence from device to device.
 
-
 ```{r, echo = FALSE, warning=FALSE, message=FALSE}
 source_df$date_sold <- as.Date(source_df$date_sold)
 source_df$date_repaired <- as.Date(source_df$date_repaired)
-source_df
+
 source_df <- source_df %>%
   mutate(time_to_failure = as.numeric(difftime(ymd(date_repaired), ymd(date_sold), units = "days"))) %>%
   mutate(
@@ -103,45 +102,87 @@ source_df <- source_df %>%
   )
 
 (p0 <- source_df %>%
-  ggplot(aes(time_to_failure)) + geom_histogram(aes(fill=failure_description), binwidth = 1) +
+  ggplot(aes(time_to_failure)) + geom_histogram(aes(fill=failure_description, color = failure_description), binwidth = 5) +
   facet_wrap(~part_code, ncol = 1) +
-  theme_light()  + ylab("frequency") + xlab("lifetime at failure (days)") +
+  theme_light()  + labs(y = "frequency", x = "time-to-failure (days)", title = "Time-to-failure by part and by failure description") +
   ylim(0,15))
 ```
 
-We already see some interesting patterns here, for example a lot of failures are recorded in the first 150 days of life for the part *K01*, while failure seems more spead for other parts, but it's quite hard to tell more at this point. A way to make more sense of these spiky frequencies is to estimate failure-specific density distributions. The obtained density distributions will have two advantages:
+We already see some interesting patterns here, for example a lot of failures are recorded in the first 50 days of life for the part *K01*, while failure seems more spead for other parts, but it's quite hard to tell more at this point. Besides, such a histogram suffers from a bias due to the right-censored nature of time-to-failure data. Suppose the vast majority of the devices containing the part *K01* have been sold in the last 50 days, then the relative peak we observe on the figure might simply reflect the fact that most of the devices about which we know the reparation date are relatively young.
 
-* get a smooth distribution of when failures are likely to occur by getting rid of uninformative spikes;
+A way to make better use of these data is to estimate probability density functions of time-to-failure for each device part. The obtained density functions will have three advantages:
+
+* get a smooth distribution of lifetimes at which failures are likely to occur by getting rid of uninformative spikes;
 * get a vector of (relative) failure probabilities instead of frequencies. This is what we'll need for the forecasting part.
+* provided that a proper technique is used, get rid of the censoring bias.
 
-Besides, the previous frequency chart as well as any histogram or density function directly drawn from it might suffer from a bias due to the right-censored nature of the time-to-failure dataset i.e. the fact that some devices have not failed yet. Suppose the vast majority of the devices containing the parts K01 have been sold in the 50 last days. Then the peak we observed on figure **x** might simply reflect the fact most of the devices about which we know the reparation date are relatively young.
+We'll use a version of the Kernel density estimator introduced by @foldes1981strong in which kernels are weighted so as to make it robust to right-censoring. The R function `presmooth` implements that method.
 
-We'll use a version of the Kernel density estimator introduced by (**cite author**) in which kernels are weighted to counter this right censoring bias. The function `presmooth` does exactly that. 
-
+What I want to get for each pair (*part*; *failure type*) is a probability distribution of the pair's time-to-failure.
 ```{r, echo = FALSE, warning=FALSE, message=FALSE}
-# 1. Nest dataset so that each value in the column "data" is actually a 2-columns dataframe that records for each failure the lifetime at which it occured and the total number of devices from the corresponding model in the installed base.
-(source_df_nested <- source_df %>%
+
+# 1. Adapt the dataset for the presmooth function that takes as parameter two vector: one of (censored) durations 
+# and one of a censoring indicator. Censored values must be coded as 0, uncensored values as 1.
+source_df2 <- source_df %>%
+  mutate(time_to_failure = ifelse(is.na(time_to_failure), difftime(Sys.Date(), date_sold, units = "days"), time_to_failure)) %>%
+  select(-c(date_sold, date_repaired, terminal_model, X, part))
+
+source_df_nested <- source_df2 %>%
+  group_by(part_code, failure_description) %>%
+  nest()
+
+get_censored_format <- function(part, description){
+  models_containing_that_part <-  source_df %>%
+    filter(part_code == part) %>%
+    select(terminal_model) %>%
+    unique()
+  
+  df <- source_df %>%
+    unnest() %>%
+    filter(terminal_model %in% models_containing_that_part) %>%
+    mutate(censoring_indicator = ifelse(failure_description == description, 1, 0)) %>%
+    mutate(failure_description = description) %>%
+    select(failure_description, time_to_failure, censoring_indicator)
+  
+  return(df)
+}
+
+ready_df <- source_df_nested %>%
+  mutate(censoring_info = map2(part_code, failure_description, get_censored_format)) 
+
+
+# 2. Nest dataset so that each value in the column "data" is actually a 2-columns dataframe that records for each failure 
+# the lifetime at which it occured and the total number of devices from the corresponding model in the installed base.
+source_df_censored_nested <- source_df_censored %>%
   select(-terminal_model) %>%
   group_by(part, part_code, failure_description) %>%
-  filter(!is.na(failure_description)) %>%
-  nest())
-```
+  filter(!is.na(failure_description)) %>% ### This is the issue: I cannot drop all these lines, instead I should reattribute (part;failure_description) labels in the right (empirical) proportion to empty rows 
+  nest()
 
-A function will be applied that returns for each pair (*part*; *failure type*) a probability distribution in the part's time-to-failure.
-```{r, echo = FALSE, warning=FALSE, message=FALSE}
+# 3. Create function that returns the estimated probability density function
 get_weighted_presmooth_density_df  <- function(df) {
   
-  kdensity <- presmooth(times = df[["time_to_failure"]], status = rep(1,length(df[["time_to_failure"]])), estimand = "f", x.est = seq(0,3000, by=1), bw.selec = "plug-in")
+  kdensity <- presmooth(times = df[["time_to_failure"]], status = df[["censoring_indicator"]], estimand = "f", x.est = seq(0,3000, by=1), bw.selec = "plug-in")
   data.frame(
     life_length = kdensity$x.est,
     weighted_density = kdensity$estimate
   )
 }
 
-densities_df <- source_df_nested %>%
-  mutate(density_est = map(data, get_weighted_presmooth_density_df)) %>%
-  select(-data) 
+# Now we'll have to find a way to attribute failure_description's to empty rows 
+# in proportions that correspond to their relative likelihood
+# i.e. their relative frequency + their distribution
+
+# Maybe for a given device i, duplicating empty rows for each of its parts and then consider these observations as censored might work. It would actually do the weighting down process at the same time as handling the right-censoring bias.
+
+# 4. Apply function
+# densities_df <- source_df_censored_nested %>%
+#   mutate(density_est = map(data, get_weighted_presmooth_density_df)) %>%
+#   select(-data)
 ```
+
+
+
 
 ## References
 

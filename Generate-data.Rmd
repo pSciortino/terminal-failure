@@ -134,7 +134,7 @@ generate_parts_failures <- function(part_code){
     df = data.frame(
       failure_description = "Key not responding",
       timetofailure_theoretical = sample(
-          c(rsn(n = 1, omega = 60, alpha = 10, tau = 0),  #Skewed normal
+          c(rsn(n = 1, omega = 60, alpha = 10, tau = 0) - 70,  #Skewed normal
             rsn(n = 1, omega = -100, alpha = 5, tau = 10) + 400, #Skewed normal
             runif(1, min = 1, max = 5000)), # Uniform
             size = 1, 
